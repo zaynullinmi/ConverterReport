@@ -51,48 +51,47 @@ internal sealed class ChartPagesWriter
         var family = _m.Config.Charts.FontFamily;
         var font = new XFont(family, 9);
         var bold = new XFont(family, 9, XFontStyleEx.Bold);
+        var title = new XFont(family, 11, XFontStyleEx.Bold);
         var text = new XSolidBrush(Palette.ChartText);
         var accent = new XSolidBrush(Palette.ChartReview);
 
-        // Шапка: дата состояния слева, справа — загружено всего / окончание экспертизы / осталось дней.
+        // Как на листе «Диаграммы»: «По состоянию на» + дата; между диаграммами — «Всего:», заголовок загрузок,
+        // дата окончания экспертизы и сколько дней осталось.
         var top = Margin;
         ChartRenderer.Text(gfx, "По состоянию на ", font, text, Margin, top, 0, 0);
         var w = gfx.MeasureString("По состоянию на ", font).Width;
-        ChartRenderer.Text(gfx, Formats.DateTimeText(_m.ReportTime), bold, text, Margin + w, top, 0, 0);
-
-        var info = new List<(string Label, string Value)>();
-        if (loads is not null && item.Daily.Count > 0)
-            info.Add(($"Загружено документов с {Formats.Date(item.Daily[0].Date)}: ", Formats.Number(item.LoadedInCharts)));
-        if (item.ExpertiseEnd is { } end)
-        {
-            info.Add(("Дата окончания экспертизы: ", Formats.Date(end)));
-            var days = (end.Date - _m.ReportTime.Date).Days;
-            info.Add(days >= 0 ? ("Осталось дней: ", days.ToString(Formats.Ru)) : ("Срок истек ", $"{-days} дн. назад"));
-        }
-
-        var x = width - Margin;
-        for (var i = info.Count - 1; i >= 0; i--)
-        {
-            var (label, value) = info[i];
-            var vw = gfx.MeasureString(value, bold).Width;
-            ChartRenderer.Text(gfx, value, bold, accent, x, top, 1, 0);
-            x -= vw;
-            ChartRenderer.Text(gfx, label, font, text, x, top, 1, 0);
-            x -= gfx.MeasureString(label, font).Width + 18;
-        }
+        ChartRenderer.Text(gfx, Formats.Date(_m.ReportTime), bold, text, Margin + w, top, 0, 0);
 
         var chartsTop = top + 16;
         var available = height - chartsTop - Margin;
-        if (remarks is not null && loads is not null)
-        {
-            var remarksHeight = available * 0.6;
+        const double infoHeight = 22;
+        var remarksHeight = loads is null ? available : remarks is null ? 0 : (available - infoHeight) * 0.6;
+        if (remarks is not null)
             _renderer.Draw(gfx, new XRect(Margin, chartsTop, width - 2 * Margin, remarksHeight), remarks);
-            _renderer.Draw(gfx, new XRect(Margin, chartsTop + remarksHeight + 10, width - 2 * Margin, available - remarksHeight - 10), loads);
-        }
-        else
+        if (loads is null)
+            return;
+
+        var infoY = chartsTop + remarksHeight + infoHeight / 2;
+        var loadsTitle = Formats.ApplyTemplate(_m.Config.Charts.LoadsTitle, values: Names(item));
+        ChartRenderer.Text(gfx, "Всего:  ", bold, text, Margin + 120, infoY, 1, 0.5);
+        ChartRenderer.Text(gfx, Formats.Number(item.LoadedInCharts), bold, text, Margin + 120, infoY, 0, 0.5);
+        ChartRenderer.Text(gfx, loadsTitle, title, text, width / 2, infoY, 0.5, 0.5);
+        if (item.ExpertiseEnd is { } end && item != _m.Summary)
         {
-            _renderer.Draw(gfx, new XRect(Margin, chartsTop, width - 2 * Margin, available), (remarks ?? loads)!);
+            var days = (end.Date - _m.ReportTime.Date).Days;
+            var right = width - Margin;
+            var daysText = days >= 0 ? days.ToString(Formats.Ru) : $"срок истек {-days} дн. назад";
+            ChartRenderer.Text(gfx, daysText, bold, text, right, infoY, 1, 0.5);
+            right -= gfx.MeasureString(daysText, bold).Width + 6;
+            ChartRenderer.Text(gfx, "Осталось дней:", bold, text, right, infoY, 1, 0.5);
+            right -= gfx.MeasureString("Осталось дней:", bold).Width + 30;
+            ChartRenderer.Text(gfx, Formats.Date(end), bold, accent, right, infoY, 1, 0.5);
+            right -= gfx.MeasureString(Formats.Date(end), bold).Width + 6;
+            ChartRenderer.Text(gfx, "Дата окончания экспертизы:", bold, accent, right, infoY, 1, 0.5);
         }
+
+        var loadsTop = chartsTop + remarksHeight + infoHeight;
+        _renderer.Draw(gfx, new XRect(Margin, loadsTop, width - 2 * Margin, height - Margin - loadsTop), loads);
     }
 
     private ChartSpec RemarksSpec(ProjectReport p)
@@ -106,13 +105,15 @@ internal sealed class ChartPagesWriter
             ReportIndex = ReportIndex(daily),
             Deadline = p.ExpertiseEnd,
             Labels = cs.DataLabels,
+            DateFormat = "dd.MM.yyyy ddd",
         };
         spec.Bars.Add(new BarSeries("Устраняется", Palette.ChartFixing, daily.Select(d => (double?)d.Remarks?.Fixing).ToArray()));
         spec.Bars.Add(new BarSeries("Рассматривается", Palette.ChartReview, daily.Select(d => (double?)d.Remarks?.Review).ToArray()));
         spec.Bars.Add(new BarSeries("Устранено за сутки", Palette.ChartFixedPerDay, daily.Select(d => (double?)d.FixedPerDay).ToArray()));
-        spec.Lines.Add(new LineSeries("Всего", Palette.ChartTotal, daily.Select(d => (double?)d.Remarks?.Total).ToArray()));
+        spec.Lines.Add(new LineSeries("Всего", Palette.ChartTotal, daily.Select(d => (double?)d.Remarks?.Total).ToArray(),
+            Trend: cs.TrendLine, TrendColor: XColor.FromArgb(0x44, 0x72, 0xC4)));
         spec.Lines.Add(new LineSeries("Устранено", Palette.ChartFixed, daily.Select(d => (double?)d.Remarks?.Fixed).ToArray(),
-            Trend: cs.TrendLine, Labels: LabelPosition.Below));
+            Trend: cs.TrendLine, Labels: LabelPosition.Below, TrendColor: XColor.FromArgb(0xED, 0x7D, 0x31)));
         return spec;
     }
 
@@ -122,10 +123,11 @@ internal sealed class ChartPagesWriter
         var reportDate = _m.ReportTime.Date;
         var spec = new ChartSpec
         {
-            Title = Formats.ApplyTemplate(cs.LoadsTitle, values: Names(p)),
+            Title = "",
             Dates = p.Daily.Select(d => d.Date).ToList(),
             ReportIndex = ReportIndex(p.Daily),
             Labels = cs.DataLabels,
+            DateFormat = "dd.MM.yyyy ddd",
         };
         spec.Bars.Add(new BarSeries("Загружено документов", Palette.ChartLoaded,
             p.Daily.Select(d => d.Date <= reportDate ? (double?)d.Loaded : null).ToArray()));

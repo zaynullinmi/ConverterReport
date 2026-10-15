@@ -3,6 +3,7 @@ using ConverterReport.Core.Configuration;
 using ConverterReport.Core.Pdf;
 using PdfSharp.Drawing;
 using PdfSharp.Pdf;
+using PdfSharp.Pdf.IO;
 
 namespace ConverterReport.Tests;
 
@@ -22,10 +23,11 @@ public sealed class PdfTests : IDisposable
     }
 
     [Fact]
-    public void BuildsSinglePdfWithDailyDetailedAndCharts_SkippingProjectsWithoutData()
+    public void BuildsWorkbookAndThreePdfs_SkippingProjectsWithoutData()
     {
         var config = new ReportConfig { BaseDirectory = _dir };
         config.Report.OutputFolder = "out";
+        config.Report.PdfEngine = PdfEngine.Builtin;
         // Шесть этапов с данными + один с пустым экраном (диаграмм по нему быть не должно) + один отсутствующий файл.
         for (var i = 1; i <= 6; i++)
         {
@@ -46,40 +48,40 @@ public sealed class PdfTests : IDisposable
         {
             Date = new DateTime(2026, 10, 15),
             Time = TimeSpan.FromHours(8),
-            PerProject = true,
-            ExportExcel = true,
         });
 
-        var main = result.Files[0];
-        Assert.EndsWith("2026.10.15 08.00 Суточный отчет ГГЭ.pdf", main);
-        Assert.True(File.Exists(main));
-
-        using var pdf = PdfSharp.Pdf.IO.PdfReader.Open(main, PdfSharp.Pdf.IO.PdfDocumentOpenMode.Import);
-        // Суточный (может занять 1–2 страницы) + детальный + сводная диаграмма + 6 этапов с данными.
-        var chartPages = pdf.Pages.Cast<PdfPage>().Count(p => p.Width.Point > p.Height.Point);
-        Assert.Equal(7, chartPages);
-        Assert.InRange(pdf.PageCount, 9, 11);
-
-        // Отдельные PDF по этапам: только по этапам с данными (6 шт.), плюс Excel.
-        Assert.Equal(1 + 6 + 1, result.Files.Count);
-        Assert.Contains(result.Files, f => f.EndsWith("Суточный отчет ГГЭ 3 этап.pdf"));
-        Assert.Contains(result.Files, f => f.EndsWith(".xlsx"));
+        Assert.EndsWith("2026.10.15 8.00 Сводный отчет ГГЭ 1-8 этапы ВСМ-1 1.0.xlsx", result.Workbook);
+        Assert.Equal(3, result.Pdfs.Count);
+        Assert.EndsWith("2026.10.15 8.00 Суточный 1-8 этапы 1.0.pdf", result.Pdfs[0]);
+        Assert.EndsWith("2026.10.15 8.00 Суточный 1-8 этапы 1.0 (дет).pdf", result.Pdfs[1]);
+        Assert.EndsWith("2026.10.15 8.00 Суточный 1-8 этапы 1.0 Диаграммы.pdf", result.Pdfs[2]);
         Assert.Contains(result.Warnings, w => w.StartsWith("Этап 8:"));
+
+        using (var daily = PdfReader.Open(result.Pdfs[0], PdfDocumentOpenMode.Import))
+            Assert.True(daily.Pages[0].Height.Point > daily.Pages[0].Width.Point);
+        using (var charts = PdfReader.Open(result.Pdfs[2], PdfDocumentOpenMode.Import))
+        {
+            // Сводная диаграмма + 6 этапов с данными; этап с пустым экраном пропущен. Листы A3 альбомные.
+            Assert.Equal(7, charts.PageCount);
+            Assert.All(charts.Pages.Cast<PdfPage>(), p => Assert.True(p.Width.Point > 1100));
+        }
     }
 
     [Fact]
-    public void ChartsOnlyReportHasNoTextPages()
+    public void ChartsOnlyReportProducesOnlyChartsPdf()
     {
         CreateScreen("Экран.xlsx", scale: 1);
         var config = new ReportConfig { BaseDirectory = _dir };
         config.Report.IncludeDaily = false;
         config.Report.IncludeDetailed = false;
+        config.Report.PdfEngine = PdfEngine.Builtin;
         config.Projects.Add(new ProjectConfig { Number = "3", ScreenFile = "Экран.xlsx" });
 
         var result = new ReportGenerator().Run(config, new RunOptions { Date = new DateTime(2026, 10, 15), Time = TimeSpan.FromHours(18) });
 
-        using var pdf = PdfSharp.Pdf.IO.PdfReader.Open(result.Files[0], PdfSharp.Pdf.IO.PdfDocumentOpenMode.Import);
-        Assert.Equal(1, pdf.PageCount);
+        var pdf = Assert.Single(result.Pdfs);
+        using var doc = PdfReader.Open(pdf, PdfDocumentOpenMode.Import);
+        Assert.Equal(1, doc.PageCount);
     }
 
     [Fact]

@@ -34,15 +34,25 @@ public sealed class ScreenReader
 
         var remarks = FindSheet(workbook, _layout.RemarksSheet);
         if (remarks is null)
+        {
             data.Warnings.Add($"В файле нет листа \"{_layout.RemarksSheet}\".");
+        }
         else
+        {
             ReadRemarks(remarks, data);
+            data.RawRemarks = Raw(remarks);
+        }
 
         var documents = FindSheet(workbook, _layout.DocumentsSheet);
         if (documents is null)
+        {
             data.Warnings.Add($"В файле нет листа \"{_layout.DocumentsSheet}\".");
+        }
         else
+        {
             ReadLoads(documents, data);
+            data.RawDocuments = Raw(documents);
+        }
 
         return data;
     }
@@ -128,6 +138,27 @@ public sealed class ScreenReader
         }
 
         data.Loads.Sort((a, b) => a.End.CompareTo(b.End));
+    }
+
+    /// <summary>Значения всех ячеек листа — для копии листа в сводную книгу (листы «З.N» и «Д.N»).</summary>
+    private static RawSheet Raw(IXLWorksheet sheet)
+    {
+        var raw = new RawSheet { Name = sheet.Name };
+        foreach (var cell in sheet.CellsUsed(XLCellsUsedOptions.Contents))
+        {
+            var value = Value(cell);
+            if (value is null || value is string { Length: 0 })
+                continue;
+            var row = cell.Address.RowNumber;
+            var col = cell.Address.ColumnNumber;
+            raw.Cells[(row, col)] = value;
+            raw.LastRow = Math.Max(raw.LastRow, row);
+            raw.LastColumn = Math.Max(raw.LastColumn, col);
+        }
+
+        foreach (var column in sheet.ColumnsUsed())
+            raw.ColumnWidths[column.ColumnNumber()] = column.Width;
+        return raw;
     }
 
     private static StatusCounts ReadCounts(IXLRow row, int firstColumn) => new(

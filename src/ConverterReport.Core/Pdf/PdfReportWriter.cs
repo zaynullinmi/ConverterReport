@@ -4,30 +4,36 @@ using PdfSharp.Pdf;
 
 namespace ConverterReport.Core.Pdf;
 
-public sealed record PdfWriteResult(string Path, int Pages, int ChartPages, int RemovedBlankPages);
+public sealed record PdfWriteResult(string Path, int Pages, int RemovedBlankPages);
 
 /// <summary>
-/// Один PDF: суточный отчет на дату → детальный отчет → диаграммы. Пустые страницы не выводятся.
+/// Встроенный генератор PDF (без Excel): суточный отчет, детальный отчет и диаграммы — отдельными файлами.
+/// Используется, если на компьютере нет Excel или так указано в настройках. Пустые страницы не выводятся.
 /// </summary>
 public static class PdfReportWriter
 {
-    public static PdfWriteResult Write(ReportModel model, string path)
+    public static PdfWriteResult WriteDaily(ReportModel model, string path) => Save(Render(model, daily: true, detailed: false, charts: false), path);
+
+    public static PdfWriteResult WriteDetailed(ReportModel model, string path) => Save(Render(model, daily: false, detailed: true, charts: false), path);
+
+    public static PdfWriteResult WriteCharts(ReportModel model, string path) => Save(Render(model, daily: false, detailed: false, charts: true), path);
+
+    private static PdfWriteResult Save((PdfDocument Document, int Removed) rendered, string path)
     {
-        using var document = Render(model, out var chartPages, out var removed);
+        using var document = rendered.Document;
         var pages = document.PageCount;
         if (pages == 0)
-            throw new InvalidOperationException("Нет данных для формирования отчета: все разделы пустые.");
+            throw new InvalidOperationException("Нет данных для формирования PDF: раздел пустой.");
         document.Save(path);
-        return new PdfWriteResult(path, pages, chartPages, removed);
+        return new PdfWriteResult(path, pages, rendered.Removed);
     }
 
-    public static PdfDocument Render(ReportModel model, out int chartPages, out int removedBlankPages)
+    public static (PdfDocument Document, int Removed) Render(ReportModel model, bool daily, bool detailed, bool charts)
     {
         SystemFontResolver.Register();
-        var settings = model.Config.Report;
 
         var builder = new ReportDocumentBuilder(model);
-        var doc = builder.Build(settings.IncludeDaily, settings.IncludeDetailed);
+        var doc = builder.Build(daily, detailed);
 
         PdfDocument pdf;
         if (builder.HasContent)
@@ -45,8 +51,9 @@ public static class PdfReportWriter
         pdf.Info.Subject = doc.Info.Subject;
         pdf.Info.Creator = "ConverterReport";
 
-        chartPages = settings.IncludeCharts ? new ChartPagesWriter(model).AddPages(pdf) : 0;
-        removedBlankPages = pdf.PageCount > 1 ? BlankPageRemover.RemoveBlankPages(pdf) : 0;
-        return pdf;
+        if (charts)
+            new ChartPagesWriter(model).AddPages(pdf);
+        var removed = pdf.PageCount > 1 ? BlankPageRemover.RemoveBlankPages(pdf) : 0;
+        return (pdf, removed);
     }
 }

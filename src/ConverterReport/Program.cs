@@ -9,7 +9,8 @@ namespace ConverterReport;
 internal static class Program
 {
     private const string Help = """
-        ConverterReport — сборка суточного отчета ГГЭ в один PDF по данным файлов «Экран».
+        ConverterReport — суточный отчет ГГЭ по данным файлов «Экран»: сводная книга Excel и три PDF
+        (суточный отчет, детальный отчет, диаграммы).
 
         Использование:
           ConverterReport [параметры]
@@ -20,9 +21,9 @@ internal static class Program
           -d, --date <дд.мм.гггг> дата отчета (по умолчанию — сегодня)
           -t, --time <чч:мм>      время отчета (по умолчанию — ближайшее из ReportTimes, например 08:00 или 18:00)
               --from "<дд.мм.гггг чч:мм>"  начало отчетного периода (по умолчанию 18:00 предыдущего дня)
-          -o, --out <папка>       папка для PDF (перекрывает OutputFolder)
-              --per-project       дополнительно PDF по каждому этапу
-              --excel             дополнительно выгрузить рассчитанные данные в Excel
+          -o, --out <папка>       папка для книги и PDF (перекрывает OutputFolder)
+              --engine <excel|builtin>  чем сохранять PDF: через Excel (как вручную) или встроенным генератором
+                                  (по умолчанию — через Excel, если он установлен)
           -n, --note "<текст>"    добавить строку в раздел «Справочно» (можно несколько раз)
               --open              открыть PDF после формирования
               --init              создать пример файла настроек и выйти
@@ -32,7 +33,7 @@ internal static class Program
         Примеры:
           ConverterReport
           ConverterReport -t 18:00
-          ConverterReport -d 15.10.2026 -t 08:00 --per-project --open
+          ConverterReport -d 15.10.2026 -t 08:00 --open
         """;
 
     private static int Main(string[] args)
@@ -73,8 +74,7 @@ internal static class Program
         DateTime? date = null;
         TimeSpan? time = null;
         DateTime? from = null;
-        bool? perProject = null;
-        bool? excel = null;
+        PdfEngine? engine = null;
         var open = false;
         var init = false;
         var notes = new List<string>();
@@ -104,11 +104,14 @@ internal static class Program
                 case "-o" or "--out":
                     outFolder = Next();
                     break;
-                case "--per-project":
-                    perProject = true;
-                    break;
-                case "--excel":
-                    excel = true;
+                case "--engine":
+                    engine = Next().ToLowerInvariant() switch
+                    {
+                        "excel" => PdfEngine.Excel,
+                        "builtin" or "встроенный" => PdfEngine.Builtin,
+                        "auto" => PdfEngine.Auto,
+                        var other => throw new ConfigurationException(new[] { $"Неизвестное значение --engine: {other} (excel, builtin или auto)." }),
+                    };
                     break;
                 case "-n" or "--note":
                     notes.Add(Next());
@@ -148,20 +151,22 @@ internal static class Program
             Time = time,
             PeriodStart = from,
             OutputFolder = outFolder,
-            PerProject = perProject,
-            ExportExcel = excel,
+            PdfEngine = engine,
             ExtraNotes = notes,
         });
 
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine($"Готово. Сформировано файлов: {result.Files.Count}.");
+        Console.WriteLine($"Готово. Сводная книга и PDF ({result.Pdfs.Count} шт.) — в папке {Path.GetDirectoryName(result.Workbook)}.");
         Console.ResetColor();
         if (result.Warnings.Count > 0)
             Console.WriteLine($"Предупреждений: {result.Warnings.Count} (см. выше и в журнале ConverterReport.log).");
 
-        if (open && result.Files.Count > 0)
-            Process.Start(new ProcessStartInfo(result.Files[0]) { UseShellExecute = true });
+        if (open)
+        {
+            foreach (var pdf in result.Pdfs)
+                Process.Start(new ProcessStartInfo(pdf) { UseShellExecute = true });
+        }
         return 0;
     }
 

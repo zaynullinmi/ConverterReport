@@ -134,4 +134,26 @@ public sealed class ScreenData
     public List<DocumentLoad> Loads { get; } = new();
 
     public List<string> Warnings { get; } = new();
+
+    /// <summary>Все значения листа «Замечания» (для листа «З.N» сводной книги).</summary>
+    public RawSheet? RawRemarks { get; set; }
+
+    /// <summary>Все значения листа «Документы» (для листа «Д.N» сводной книги).</summary>
+    public RawSheet? RawDocuments { get; set; }
+}
+
+/// <summary>Значения ячеек листа (без формул и оформления): ключ — (строка, столбец), нумерация с 1.</summary>
+public sealed class RawSheet
+{
+    public string Name { get; init; } = "";
+
+    public Dictionary<(int Row, int Column), object> Cells { get; } = new();
+
+    public Dictionary<int, double> ColumnWidths { get; } = new();
+
+    public int LastRow { get; set; }
+
+    public int LastColumn { get; set; }
+
+    public object? Get(int row, int column) => Cells.TryGetValue((row, column), out var v) ? v : null;
 }

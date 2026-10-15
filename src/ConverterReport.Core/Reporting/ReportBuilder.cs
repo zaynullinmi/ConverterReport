@@ -98,10 +98,12 @@ public static class ReportBuilder
         var snapshots = screen.Remarks.Where(s => s.Timestamp <= reportTime).ToList();
         var loads = screen.Loads.Where(l => l.End <= reportTime).ToList();
 
-        // Начало оси: явно заданное → начало сроков экспертизы (входной контроль) → первая заполненная строка экрана.
+        // Начало оси: явно заданное → первая заполненная строка экрана после начала сроков (входного контроля)
+        // → первая заполненная строка экрана → первая загрузка.
+        var earliest = EarliestDeadline(report.Project);
         var from = Formats.ParseDate(report.Project.ChartStartDate)?.Date
                    ?? globalChartStart
-                   ?? EarliestDeadline(report.Project)
+                   ?? (earliest is null ? null : snapshots.FirstOrDefault(s => s.Timestamp.Date >= earliest)?.Timestamp.Date ?? earliest)
                    ?? snapshots.FirstOrDefault()?.Timestamp.Date
                    ?? loads.FirstOrDefault()?.End.Date;
         if (from is null || from > reportDate)
@@ -135,7 +137,7 @@ public static class ReportBuilder
     private static ProjectReport BuildSummary(ReportModel model)
     {
         var config = model.Config;
-        var name = Formats.ApplyTemplate(config.Charts.SummaryName, values: new Dictionary<string, string> { ["projects"] = model.ProjectsList });
+        var name = Formats.ApplyTemplate(config.Charts.SummaryName, values: new Dictionary<string, string> { ["projects"] = model.ProjectsList.Replace(", ", ",") });
         var summary = new ProjectReport { Project = new ProjectConfig { Number = model.ProjectsList, Name = name } };
 
         var withData = model.Projects.Where(p => p.Daily.Count > 0).ToList();

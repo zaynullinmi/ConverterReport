@@ -55,21 +55,32 @@ public sealed class ReportSettings
 
     public string OutputFolder { get; set; } = "Отчеты";
 
-    /// <summary>Шаблон имени общего PDF. Подстановки: {date:формат}, {time:формат}.</summary>
-    public string FileName { get; set; } = "{date:yyyy.MM.dd} {time:HH.mm} Суточный отчет ГГЭ";
+    /// <summary>Версия формы отчета — подставляется в имена файлов ({version}).</summary>
+    public string Version { get; set; } = "1.0";
 
-    /// <summary>Шаблон имени PDF по отдельному этапу. Дополнительно: {number}, {name}.</summary>
-    public string ProjectFileName { get; set; } = "{date:yyyy.MM.dd} {time:HH.mm} Суточный отчет ГГЭ {number} этап";
+    /// <summary>
+    /// Имена файлов (без расширения). Подстановки: {date:формат}, {time:формат}, {projects} («2-4, 9»),
+    /// {projectsShort} («2-4,9»), {version}.
+    /// </summary>
+    public string FileName { get; set; } = "{date:yyyy.MM.dd} {time:H.mm} Суточный {projectsShort} этапы {version}";
 
-    /// <summary>Дополнительно формировать отдельный PDF по каждому этапу.</summary>
-    public bool PerProjectReports { get; set; }
+    public string DetailedFileName { get; set; } = "{date:yyyy.MM.dd} {time:H.mm} Суточный {projectsShort} этапы {version} (дет)";
 
-    /// <summary>Дополнительно выгружать рассчитанные данные в Excel (рядом с PDF).</summary>
-    public bool ExportExcel { get; set; }
+    public string ChartsFileName { get; set; } = "{date:yyyy.MM.dd} {time:H.mm} Суточный {projectsShort} этапы {version} Диаграммы";
+
+    /// <summary>Сводная книга Excel (.xlsx) со всеми листами, формулами и диаграммами.</summary>
+    public string WorkbookFileName { get; set; } = "{date:yyyy.MM.dd} {time:H.mm} Сводный отчет ГГЭ {projectsShort} этапы ВСМ-1 {version}";
+
+    /// <summary>
+    /// Чем сохранять PDF: Auto — через Excel, если он установлен (вид как при ручном сохранении), иначе встроенным генератором;
+    /// Excel — только через Excel; Builtin — только встроенным генератором (Excel не нужен).
+    /// </summary>
+    public PdfEngine PdfEngine { get; set; } = PdfEngine.Auto;
 
     /// <summary>Текстовый файл с разделом «Справочно» (необязательно). Пустой файл — раздел не выводится.</summary>
     public string? NotesFile { get; set; } = "Справочно.txt";
 
+    /// <summary>Какие PDF сохранять: суточный отчет, детальный отчет, диаграммы.</summary>
     public bool IncludeDaily { get; set; } = true;
 
     public bool IncludeDetailed { get; set; } = true;
@@ -91,6 +102,14 @@ public sealed class ReportSettings
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
+public enum PdfEngine
+{
+    Auto,
+    Excel,
+    Builtin,
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
 public enum LoadsMode
 {
     Sum,
@@ -100,7 +119,7 @@ public enum LoadsMode
 public sealed class ChartSettings
 {
     /// <summary>Формат листов с диаграммами: A4 или A3 (альбомная ориентация).</summary>
-    public string PageSize { get; set; } = "A4";
+    public string PageSize { get; set; } = "A3";
 
     /// <summary>Сводные диаграммы по всем этапам (выводятся, если этапов больше одного).</summary>
     public bool SummaryChart { get; set; } = true;
@@ -112,7 +131,7 @@ public sealed class ChartSettings
     /// <summary>Имя для сводных диаграмм; {projects} заменяется на «2-4, 9».</summary>
     public string SummaryName { get; set; } = "{projects} этапы";
 
-    /// <summary>Общая дата начала диаграмм (дд.мм.гггг). Если не задана — с начала сроков этапа (входной контроль), а если сроков нет — с первой заполненной строки экрана.</summary>
+    /// <summary>Общая дата начала диаграмм (дд.мм.гггг). Если не задана — с первой заполненной строки экрана после начала сроков этапа (входного контроля), а если сроков нет — с первой заполненной строки.</summary>
     public string? StartDate { get; set; }
 
     /// <summary>Продлевать ось дат до окончания экспертизы (видно, сколько осталось).</summary>

@@ -7,7 +7,7 @@ namespace ConverterReport.Core.Pdf;
 internal sealed record BarSeries(string Name, XColor Color, double?[] Values);
 
 /// <summary>Ряд-линия. <see cref="Trend"/> — дополнительно нарисовать линейный тренд (прогноз) до конца оси.</summary>
-internal sealed record LineSeries(string Name, XColor Color, double?[] Values, bool Trend = false, LabelPosition Labels = LabelPosition.Above);
+internal sealed record LineSeries(string Name, XColor Color, double?[] Values, bool Trend = false, LabelPosition Labels = LabelPosition.Above, XColor? TrendColor = null);
 
 internal enum LabelPosition
 {
@@ -29,6 +29,9 @@ internal sealed class ChartSpec
     public DateTime? Deadline { get; init; }
 
     public DataLabelsMode Labels { get; init; } = DataLabelsMode.Auto;
+
+    /// <summary>Формат подписей дат; «ddd» — день недели.</summary>
+    public string DateFormat { get; init; } = "dd.MM";
 }
 
 /// <summary>
@@ -53,8 +56,12 @@ internal sealed class ChartRenderer
         gfx.DrawRectangle(new XPen(Palette.ChartFrame, 0.75), area);
 
         var titleFont = Font(12, bold: true);
-        Text(gfx, spec.Title, titleFont, Brush(Palette.ChartText), area.X + area.Width / 2, area.Y + 6, 0.5, 0);
-        var titleHeight = gfx.MeasureString(spec.Title, titleFont).Height + 10;
+        var titleHeight = 8.0;
+        if (!string.IsNullOrEmpty(spec.Title))
+        {
+            Text(gfx, spec.Title, titleFont, Brush(Palette.ChartText), area.X + area.Width / 2, area.Y + 6, 0.5, 0);
+            titleHeight = gfx.MeasureString(spec.Title, titleFont).Height + 10;
+        }
 
         var legendHeight = DrawLegend(gfx, area, spec);
         if (n == 0)
@@ -97,8 +104,15 @@ internal sealed class ChartRenderer
             .DefaultIfEmpty(10).Max();
 
         var sameYear = spec.Dates.Select(d => d.Year).Distinct().Count() == 1;
-        var dateFormat = sameYear ? "dd.MM" : "dd.MM.yy";
-        var xLabelHeight = gfx.MeasureString(spec.Dates[0].ToString(dateFormat, Formats.Ru), axisFont).Width + 6;
+        var dateFormat = spec.DateFormat == "dd.MM" && !sameYear ? "dd.MM.yy" : spec.DateFormat;
+        string DateLabel(DateTime d)
+        {
+            var text = d.ToString(dateFormat, Formats.Ru);
+            var space = text.LastIndexOf(' ');
+            return space >= 0 && space + 1 < text.Length ? text[..(space + 1)] + char.ToUpper(text[space + 1]) + text[(space + 2)..] : text;
+        }
+
+        var xLabelHeight = gfx.MeasureString(DateLabel(spec.Dates[0]), axisFont).Width + 6;
 
         var plot = new XRect(
             area.X + 10 + yLabelWidth,
@@ -132,7 +146,7 @@ internal sealed class ChartRenderer
             if ((i - spec.ReportIndex) % labelStep != 0)
                 continue;
             var bold = i == spec.ReportIndex;
-            TextRotated(gfx, spec.Dates[i].ToString(dateFormat, Formats.Ru), bold ? Font(7, true) : axisFont,
+            TextRotated(gfx, DateLabel(spec.Dates[i]), bold ? Font(7, true) : axisFont,
                 Brush(Palette.ChartText), X(i), plot.Bottom + 3, 1, 0.5);
         }
 
@@ -275,7 +289,7 @@ internal sealed class ChartRenderer
         var b = pts.Sum(p => (p.X - mx) * (p.Y - my)) / sxx;
         var a = my - b * mx;
         var first = (int)pts[0].X;
-        var pen = new XPen(line.Color, 1.1) { DashStyle = XDashStyle.Dash };
+        var pen = new XPen(line.TrendColor ?? line.Color, 1.1) { DashStyle = XDashStyle.Dot };
         gfx.DrawLine(pen, x(first), y(a + b * first), x(n - 1), y(a + b * (n - 1)));
     }
 
@@ -285,7 +299,7 @@ internal sealed class ChartRenderer
         var items = new List<(string Name, XColor Color, int Kind)>(); // 0 — столбец, 1 — линия, 2 — пунктир
         items.AddRange(spec.Bars.Select(b => (b.Name, b.Color, 0)));
         items.AddRange(spec.Lines.Select(l => (l.Name, l.Color, 1)));
-        items.AddRange(spec.Lines.Where(l => l.Trend).Select(l => ($"Тренд ({l.Name.ToLowerInvariant()})", l.Color, 2)));
+        items.AddRange(spec.Lines.Where(l => l.Trend).Select(l => ($"Линейная ({l.Name})", l.TrendColor ?? l.Color, 2)));
         if (spec.Deadline is { } d && IndexOf(spec.Dates, d) >= 0)
             items.Add(("Окончание экспертизы", Palette.ChartDeadline, 2));
         if (items.Count == 0)
@@ -308,7 +322,7 @@ internal sealed class ChartRenderer
                     gfx.DrawLine(new XPen(color, 1.75), x, y, x + marker, y);
                     break;
                 default:
-                    gfx.DrawLine(new XPen(color, 1.1) { DashStyle = XDashStyle.Dash }, x, y, x + marker, y);
+                    gfx.DrawLine(new XPen(color, 1.1) { DashStyle = XDashStyle.Dot }, x, y, x + marker, y);
                     break;
             }
 

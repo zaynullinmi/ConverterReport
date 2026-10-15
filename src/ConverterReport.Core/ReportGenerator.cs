@@ -4,6 +4,7 @@ using ConverterReport.Core.Export;
 using ConverterReport.Core.Pdf;
 using ConverterReport.Core.Reporting;
 using ConverterReport.Core.Screens;
+using ConverterReport.Core.Workbook;
 
 namespace ConverterReport.Core;
 
@@ -20,9 +21,7 @@ public sealed class RunOptions
 
     public string? OutputFolder { get; init; }
 
-    public bool? PerProject { get; init; }
-
-    public bool? ExportExcel { get; init; }
+    public PdfEngine? PdfEngine { get; init; }
 
     public List<string> ExtraNotes { get; init; } = new();
 }
@@ -31,7 +30,13 @@ public sealed class RunResult
 {
     public required ReportModel Model { get; init; }
 
-    public List<string> Files { get; } = new();
+    /// <summary>Сводная книга Excel.</summary>
+    public string? Workbook { get; set; }
+
+    /// <summary>PDF: суточный отчет, детальный отчет, диаграммы (те, что включены).</summary>
+    public List<string> Pdfs { get; } = new();
+
+    public IEnumerable<string> Files => (Workbook is null ? Enumerable.Empty<string>() : new[] { Workbook }).Concat(Pdfs);
 
     public List<string> Warnings { get; } = new();
 }
@@ -45,8 +50,8 @@ public sealed class ConfigurationException : Exception
 }
 
 /// <summary>
-/// Полный цикл: прочитать экраны всех этапов → рассчитать отчет → сохранить PDF (и при необходимости
-/// отдельные PDF по этапам и выгрузку в Excel).
+/// Полный цикл: прочитать экраны всех этапов → рассчитать отчет → сводная книга Excel (листы, формулы, диаграммы)
+/// → три PDF: суточный отчет, детальный отчет, диаграммы.
 /// </summary>
 public sealed class ReportGenerator
 {
@@ -87,38 +92,72 @@ public sealed class ReportGenerator
 
         var folder = config.ResolvePath(options.OutputFolder ?? config.Report.OutputFolder);
         Directory.CreateDirectory(folder);
-
-        var mainName = Formats.ApplyTemplate(config.Report.FileName, reportTime);
-        result.Files.Add(SavePdf(model, folder, mainName));
-
-        if (options.PerProject ?? config.Report.PerProjectReports)
+        var names = new Dictionary<string, string>
         {
-            foreach (var input in inputs.Where(i => i.Screen is not null))
-            {
-                var single = ReportBuilder.Build(config, new[] { input }, reportTime, periodStart, notes: null);
-                if (single.Projects[0].Current is null && single.Projects[0].PeriodLoads.Count == 0)
-                {
-                    _info($"Этап {input.Project.Number}: нет данных — отдельный PDF не формируется.");
-                    continue;
-                }
+            ["projects"] = model.ProjectsList,
+            ["projectsshort"] = model.ProjectsList.Replace(", ", ","),
+            ["version"] = config.Report.Version,
+        };
+        string FileFor(string template, string extension) =>
+            Writable(folder, Formats.SafeFileName(Formats.ApplyTemplate(template, reportTime, names)) + extension);
 
-                var name = Formats.ApplyTemplate(config.Report.ProjectFileName, reportTime, new Dictionary<string, string>
-                {
-                    ["number"] = input.Project.Number,
-                    ["name"] = input.Project.DisplayName,
-                });
-                result.Files.Add(SavePdf(single, folder, name));
+        // 1. Сводная книга Excel.
+        var workbookPath = FileFor(config.Report.WorkbookFileName, ".xlsx");
+        var workbook = SummaryWorkbookWriter.Write(model, workbookPath);
+        result.Workbook = workbookPath;
+        _info($"Сводная книга сохранена: {workbookPath}");
+
+        // 2. Три PDF.
+        var jobs = new List<(string Kind, SheetPdf Job)>();
+        if (config.Report.IncludeDaily)
+            jobs.Add(("daily", new SheetPdf(workbook.DailySheet, FileFor(config.Report.FileName, ".pdf"))));
+        if (config.Report.IncludeDetailed && model.Projects.Any(p => p.Current is not null))
+            jobs.Add(("detailed", new SheetPdf(SummaryWorkbook.DetailedSheet, FileFor(config.Report.DetailedFileName, ".pdf"))));
+        if (config.Report.IncludeCharts && workbook.ChartPages > 0)
+            jobs.Add(("charts", new SheetPdf(SummaryWorkbook.ChartsSheet, FileFor(config.Report.ChartsFileName, ".pdf"))));
+
+        var engine = options.PdfEngine ?? config.Report.PdfEngine;
+        var viaExcel = false;
+        if (engine != PdfEngine.Builtin && ExcelPdfExporter.IsAvailable())
+        {
+            try
+            {
+                ExcelPdfExporter.Export(workbookPath, jobs.Select(j => j.Job).ToList());
+                viaExcel = true;
+            }
+            catch (Exception ex) when (engine == PdfEngine.Auto)
+            {
+                _warn($"Не удалось сохранить PDF через Excel ({ex.Message}) — используется встроенный генератор.");
             }
         }
-
-        if (options.ExportExcel ?? config.Report.ExportExcel)
+        else if (engine == PdfEngine.Excel)
         {
-            var xlsx = UniquePath(folder, Formats.SafeFileName(mainName) + ".xlsx");
-            ExcelExporter.Export(model, xlsx);
-            _info($"Данные выгружены в Excel: {xlsx}");
-            result.Files.Add(xlsx);
+            throw new InvalidOperationException("Для сохранения PDF через Excel нужен Windows с установленным Microsoft Excel (PdfEngine: \"Excel\").");
         }
 
+        foreach (var (kind, job) in jobs)
+        {
+            if (!viaExcel)
+            {
+                switch (kind)
+                {
+                    case "daily":
+                        PdfReportWriter.WriteDaily(model, job.PdfPath);
+                        break;
+                    case "detailed":
+                        PdfReportWriter.WriteDetailed(model, job.PdfPath);
+                        break;
+                    default:
+                        PdfReportWriter.WriteCharts(model, job.PdfPath);
+                        break;
+                }
+            }
+
+            result.Pdfs.Add(job.PdfPath);
+            _info($"PDF сохранен: {job.PdfPath}");
+        }
+
+        _info(viaExcel ? "PDF сохранены через Microsoft Excel." : "PDF сформированы встроенным генератором.");
         return result;
     }
 
@@ -160,36 +199,26 @@ public sealed class ReportGenerator
         return inputs.ToList();
     }
 
-    private string SavePdf(ReportModel model, string folder, string name)
+    /// <summary>Путь для сохранения; если файл занят (открыт в Excel или просмотрщике PDF) — имя с номером.</summary>
+    private string Writable(string folder, string fileName)
     {
-        var path = Path.Combine(folder, Formats.SafeFileName(name) + ".pdf");
+        var path = Path.Combine(folder, fileName);
         try
         {
             if (File.Exists(path))
                 File.Delete(path);
+            return path;
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Файл открыт в просмотрщике — сохраняем под другим именем.
-            var alternative = UniquePath(folder, Path.GetFileName(path));
-            _warn($"Файл {path} занят другой программой, отчет сохранен как {alternative}.");
-            path = alternative;
+            var stem = Path.GetFileNameWithoutExtension(fileName);
+            var ext = Path.GetExtension(fileName);
+            var alternative = path;
+            for (var i = 2; File.Exists(alternative); i++)
+                alternative = Path.Combine(folder, $"{stem} ({i}){ext}");
+            _warn($"Файл {path} занят другой программой, сохраняю как {alternative}.");
+            return alternative;
         }
-
-        var result = PdfReportWriter.Write(model, path);
-        var blank = result.RemovedBlankPages > 0 ? $", удалено пустых: {result.RemovedBlankPages}" : "";
-        _info($"PDF сохранен: {result.Path} (страниц: {result.Pages}, из них диаграмм: {result.ChartPages}{blank}).");
-        return result.Path;
-    }
-
-    private static string UniquePath(string folder, string fileName)
-    {
-        var path = Path.Combine(folder, fileName);
-        var stem = Path.GetFileNameWithoutExtension(fileName);
-        var ext = Path.GetExtension(fileName);
-        for (var i = 2; File.Exists(path); i++)
-            path = Path.Combine(folder, $"{stem} ({i}){ext}");
-        return path;
     }
 
     /// <summary>Раздел «Справочно» из текстового файла: каждая непустая строка — абзац, строки с «//» — комментарии.</summary>

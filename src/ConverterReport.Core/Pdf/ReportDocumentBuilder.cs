@@ -100,7 +100,7 @@ internal sealed class ReportDocumentBuilder
         section.AddParagraph(title, "ReportTitle");
         section.AddParagraph(_s.Subtitle, "ReportSubtitle");
         section.AddParagraph(_m.Caption, "ReportSubtitle");
-        var p = section.AddParagraph($"по состоянию на {Formats.DateTimeText(_m.ReportTime)}", "ReportSubtitle");
+        var p = section.AddParagraph(_m.ReportTime.ToString("dd.MM.yyyy H:mm", Formats.Ru), "ReportSubtitle");
         p.Format.Font.Size = 11;
         p.Format.SpaceAfter = Unit.FromPoint(4);
     }
@@ -122,7 +122,7 @@ internal sealed class ReportDocumentBuilder
     private void AddLoadsSection(Section section)
     {
         section.AddParagraph(
-            $"1. Загрузка документов в АИС ГГЭ за период с {Formats.TimeDate(_m.PeriodStart)} по {Formats.TimeDate(_m.ReportTime)}.",
+            "1. Загрузка документов в АИС ГГЭ.",
             "SectionHeading");
 
         var projects = _m.Projects.Where(p => p.PeriodLoads.Count > 0 || !_s.HideProjectsWithoutLoads).ToList();
@@ -138,7 +138,7 @@ internal sealed class ReportDocumentBuilder
         var h1 = HeaderRow(table);
         var h2 = HeaderRow(table);
         Head(h1, 0, "Этап", mergeDown: 1);
-        Head(h1, 1, each ? "№" : "Кол-во загр.", mergeDown: 1, size: 7);
+        Head(h1, 1, "№", mergeDown: 1);
         Head(h1, 2, "Начало", mergeRight: 1);
         Head(h1, 4, "Окончание", mergeRight: 1);
         string[] kinds = { "Инженерные изыскания", "Проектная документация", "Сметы", "Ведомости объемов работ", "Конъюнктурный анализ цен", "Иные" };
@@ -211,8 +211,6 @@ internal sealed class ReportDocumentBuilder
         var total = _m.TotalCurrent;
         StatusRow(table, "Всего:", total, total, highlight: false, totals: true);
 
-        Footnote(section, "¹ Процент общего числа критических замечаний приведен к общему количеству всех замечаний.");
-        Footnote(section, "² Процент критических замечаний приведен к общему количеству критических замечаний.");
         AddStaleFootnotes(section);
     }
 
@@ -220,11 +218,12 @@ internal sealed class ReportDocumentBuilder
     {
         var delta = _m.TotalDelta;
         section.AddParagraph(
-            $"3. Изменение за период с {Formats.TimeDate(_m.PeriodStart)} по {Formats.TimeDate(_m.ReportTime)} " +
+            $"3. Изменение за период с {Short(_m.PeriodStart)} по {Short(_m.ReportTime)} " +
             $"(устранено всего {Formats.Number(delta.All[0].Fixed)} замечаний).",
             "SectionHeading");
 
-        var table = StatusTable(section, critical1: "%¹", critical2: "%²");
+        // Как в книге: таблица изменений без шапки — колонки те же, что в разделе 2.
+        var table = StatusTable(section, critical1: "%¹", critical2: "%²", header: false);
         foreach (var p in _m.Projects)
         {
             if (p.Delta is null || p.Current is null)
@@ -238,6 +237,8 @@ internal sealed class ReportDocumentBuilder
         }
 
         StatusRow(table, "Всего:", delta, _m.TotalCurrent, highlight: false, totals: true);
+        Footnote(section, "1. Процент общего числа критических замечаний приведен к общему количеству всех замечаний.");
+        Footnote(section, "2. Процент критических замечаний приведен к общему количеству критических замечаний.");
 
         var cur = _m.TotalCurrent;
         var open = cur.All[0].Open;
@@ -251,7 +252,9 @@ internal sealed class ReportDocumentBuilder
     }
 
     /// <summary>Таблица «Все замечания / Критические замечания» (17 колонок).</summary>
-    private Table StatusTable(Section section, string critical1, string critical2)
+    private static string Short(DateTime value) => value.ToString("H:mm dd.MM.yyyy", Formats.Ru);
+
+    private Table StatusTable(Section section, string critical1, string critical2, bool header = true)
     {
         var widths = new List<double> { 11 };
         for (var i = 0; i < 8; i++)
@@ -261,6 +264,8 @@ internal sealed class ReportDocumentBuilder
         }
 
         var table = NewTable(section, widths.ToArray(), 9);
+        if (!header)
+            return table;
         var h1 = HeaderRow(table);
         var h2 = HeaderRow(table);
         var h3 = HeaderRow(table);
@@ -414,8 +419,7 @@ internal sealed class ReportDocumentBuilder
         if (lines.Count == 0)
             return;
 
-        var head = section.AddParagraph("Справочно:", "SectionHeading");
-        head.Format.Font.Size = 11;
+        section.AddParagraph().Format.SpaceAfter = Unit.FromPoint(6);
         foreach (var line in lines)
         {
             var p = section.AddParagraph(line.Trim());
