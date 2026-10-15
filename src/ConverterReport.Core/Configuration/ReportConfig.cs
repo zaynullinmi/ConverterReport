@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Text.Json.Serialization;
 
 namespace ConverterReport.Core.Configuration;
@@ -13,6 +14,8 @@ public sealed class ReportConfig
     public ChartSettings Charts { get; set; } = new();
 
     public ScreenLayout ScreenLayout { get; set; } = new();
+
+    public UpdateSettings Updates { get; set; } = new();
 
     public List<ProjectConfig> Projects { get; set; } = new();
 
@@ -187,33 +190,73 @@ public sealed class ProjectConfig
 /// </summary>
 public sealed class ScreenLayout
 {
+    public override string ToString() => $"{RemarksSheet} / {DocumentsSheet}";
+
+    [DisplayName("Замечания: лист")]
     public string RemarksSheet { get; set; } = "Замечания";
+    [DisplayName("Замечания: первая строка данных")]
     public int RemarksFirstRow { get; set; } = 3;
+    [DisplayName("Замечания: дата")]
     public string RemarksDate { get; set; } = "B";
+    [DisplayName("Замечания: время")]
     public string RemarksTime { get; set; } = "D";
+    [DisplayName("Замечания: всего (4 столбца)")]
     public string RemarksAll { get; set; } = "E";
+    [DisplayName("Замечания: ИИ (4 столбца)")]
     public string RemarksSurvey { get; set; } = "I";
+    [DisplayName("Замечания: тех. часть (4 столбца)")]
     public string RemarksTech { get; set; } = "M";
+    [DisplayName("Замечания: сметная часть (4 столбца)")]
     public string RemarksEstimate { get; set; } = "Q";
+    [DisplayName("Критические: всего (4 столбца)")]
     public string CriticalAll { get; set; } = "U";
+    [DisplayName("Критические: ИИ (4 столбца)")]
     public string CriticalSurvey { get; set; } = "Y";
+    [DisplayName("Критические: тех. часть (4 столбца)")]
     public string CriticalTech { get; set; } = "AC";
+    [DisplayName("Критические: сметная часть (4 столбца)")]
     public string CriticalEstimate { get; set; } = "AG";
 
+    [DisplayName("Документы: лист")]
     public string DocumentsSheet { get; set; } = "Документы";
+    [DisplayName("Документы: первая строка данных")]
     public int DocumentsFirstRow { get; set; } = 3;
+    [DisplayName("Документы: начало, дата")]
     public string LoadStartDate { get; set; } = "H";
+    [DisplayName("Документы: начало, время")]
     public string LoadStartTime { get; set; } = "I";
+    [DisplayName("Документы: окончание, дата")]
     public string LoadEndDate { get; set; } = "J";
+    [DisplayName("Документы: окончание, время")]
     public string LoadEndTime { get; set; } = "K";
+    [DisplayName("Документы: ИИ")]
     public string LoadSurvey { get; set; } = "L";
+    [DisplayName("Документы: ПД")]
     public string LoadProject { get; set; } = "M";
+    [DisplayName("Документы: СМ")]
     public string LoadEstimate { get; set; } = "N";
+    [DisplayName("Документы: ВОР")]
     public string LoadVor { get; set; } = "O";
+    [DisplayName("Документы: КАЦ")]
     public string LoadKac { get; set; } = "P";
+    [DisplayName("Документы: иные")]
     public string LoadOther { get; set; } = "Q";
+    [DisplayName("Документы: ответы")]
     public string LoadAnswers { get; set; } = "S";
+    [DisplayName("Документы: аннулировано")]
     public string LoadCancelled { get; set; } = "T";
+    [DisplayName("Документы: ошибки")]
     public string LoadErrors { get; set; } = "U";
+    [DisplayName("Документы: примечание")]
     public string LoadNote { get; set; } = "V";
+}
+
+/// <summary>Автообновление программы из релизов GitHub.</summary>
+public sealed class UpdateSettings
+{
+    /// <summary>Проверять наличие новой версии при запуске программы.</summary>
+    public bool CheckOnStartup { get; set; } = true;
+
+    /// <summary>Репозиторий GitHub с релизами программы (владелец/репозиторий).</summary>
+    public string Repository { get; set; } = "zaynullinmi/ConverterReport";
 }

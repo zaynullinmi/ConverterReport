@@ -20,8 +20,9 @@ jobs:
       - name: Test
         run: dotnet test --configuration Release
 
+      # Номер версии = номер запуска CI; по нему программа находит обновления (релиз v2.0.N).
       - name: Publish win-x64
-        run: dotnet publish src/ConverterReport -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
+        run: dotnet publish src/ConverterReport.Gui -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=2.0.${{ github.run_number }} -o publish
 
       - uses: actions/upload-artifact@v4
         with:
@@ -38,6 +39,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          [Console]::OutputEncoding = [Text.Encoding]::UTF8
           $tag = "v2.0.${{ github.run_number }}"
           Compress-Archive -Path publish/ConverterReport.exe, publish/ConverterReport.sample.json, "publish/Справочно.sample.txt" -DestinationPath ConverterReport-win-x64.zip
-          gh release create $tag ConverterReport-win-x64.zip --target $env:GITHUB_SHA --title "ConverterReport $tag" --notes "Сборка из main ($env:GITHUB_SHA). Распакуйте архив, переименуйте ConverterReport.sample.json в ConverterReport.json, укажите пути к экранам и запустите ConverterReport.exe."
+          $subject = git log -1 --pretty=%s
+          @(
+            $subject
+            ""
+            "Первая установка: распакуйте архив в отдельную папку и запустите ConverterReport.exe — этапы, пути к экранам и все параметры задаются в окне программы."
+            "Дальше программа обновляется сама: при запуске проверяет новые версии (Справка → Проверить обновления)."
+          ) | Set-Content -Path notes.md -Encoding utf8
+          gh release create $tag ConverterReport-win-x64.zip --target $env:GITHUB_SHA --title "ConverterReport $tag" --notes-file notes.md

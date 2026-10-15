@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>ConverterReport</AssemblyName>
+    <RootNamespace>ConverterReport.Gui</RootNamespace>
+    <!-- Номер сборки подставляет CI: 2.0.<номер запуска>. По нему работает автообновление. -->
+    <Version>2.0.0</Version>
+    <Product>ConverterReport</Product>
+    <Description>Суточный отчет ГГЭ: сводная книга Excel и три PDF по данным файлов «Экран»</Description>
+    <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <SatelliteResourceLanguages>ru</SatelliteResourceLanguages>
+    <!-- Один exe ~70 МБ вместо ~160 МБ (действует только при PublishSingleFile). -->
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ConverterReport.Core\ConverterReport.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\ConverterReport.sample.json" Link="ConverterReport.sample.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\Справочно.sample.txt" Link="Справочно.sample.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

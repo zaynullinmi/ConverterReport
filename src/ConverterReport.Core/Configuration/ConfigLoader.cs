@@ -33,6 +33,14 @@ public static class ConfigLoader
         File.WriteAllText(path, JsonSerializer.Serialize(config, Options));
     }
 
+    /// <summary>Независимая копия настроек (для формирования отчета в фоне, пока окно открыто).</summary>
+    public static ReportConfig Clone(ReportConfig config)
+    {
+        var copy = JsonSerializer.Deserialize<ReportConfig>(JsonSerializer.Serialize(config, Options), Options)!;
+        copy.BaseDirectory = config.BaseDirectory;
+        return copy;
+    }
+
     /// <summary>Проверка конфигурации. Возвращает список ошибок (пустой — все в порядке).</summary>
     public static List<string> Validate(ReportConfig config)
     {

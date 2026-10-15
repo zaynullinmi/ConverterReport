@@ -36,6 +36,12 @@ public sealed class RunResult
     /// <summary>PDF: суточный отчет, детальный отчет, диаграммы (те, что включены).</summary>
     public List<string> Pdfs { get; } = new();
 
+    public string? DailyPdf { get; set; }
+
+    public string? DetailedPdf { get; set; }
+
+    public string? ChartsPdf { get; set; }
+
     public IEnumerable<string> Files => (Workbook is null ? Enumerable.Empty<string>() : new[] { Workbook }).Concat(Pdfs);
 
     public List<string> Warnings { get; } = new();
@@ -154,6 +160,19 @@ public sealed class ReportGenerator
             }
 
             result.Pdfs.Add(job.PdfPath);
+            switch (kind)
+            {
+                case "daily":
+                    result.DailyPdf = job.PdfPath;
+                    break;
+                case "detailed":
+                    result.DetailedPdf = job.PdfPath;
+                    break;
+                default:
+                    result.ChartsPdf = job.PdfPath;
+                    break;
+            }
+
             _info($"PDF сохранен: {job.PdfPath}");
         }
 

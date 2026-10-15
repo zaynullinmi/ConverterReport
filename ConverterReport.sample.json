@@ -75,6 +75,10 @@
     "LoadErrors": "U",
     "LoadNote": "V"
   },
+  "Updates": {
+    "CheckOnStartup": true,
+    "Repository": "zaynullinmi/ConverterReport"
+  },
   "Projects": [
     {
       "Number": "2",
