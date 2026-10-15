@@ -27,12 +27,13 @@ public static class ReportBuilder
             Config = config,
             ReportTime = reportTime,
             PeriodStart = periodStart,
+            LoadsForDay = LoadsForDay(config.Report.ReportLoads, reportTime, periodStart),
             Notes = notes?.ToList() ?? new List<string>(),
         };
 
         var globalChartStart = Formats.ParseDate(config.Charts.StartDate)?.Date;
         foreach (var input in inputs)
-            model.Projects.Add(BuildProject(config, input, reportTime, periodStart, globalChartStart));
+            model.Projects.Add(BuildProject(model, input, globalChartStart));
 
         if (model.Projects.Count > 1)
             model.Summary = BuildSummary(model);
@@ -40,8 +41,22 @@ public static class ReportBuilder
         return model;
     }
 
-    private static ProjectReport BuildProject(ReportConfig config, ProjectInput input, DateTime reportTime, DateTime periodStart, DateTime? globalChartStart)
+    /// <summary>
+    /// Раздел 1 за день или с начала периода. Авто: вечерний отчет (не раньше времени начала периода, 18:00) — за день,
+    /// утренний — с начала периода (с 18:00 прошлого дня).
+    /// </summary>
+    public static bool LoadsForDay(ReportLoadsMode mode, DateTime reportTime, DateTime periodStart) => mode switch
     {
+        ReportLoadsMode.Day => true,
+        ReportLoadsMode.Period => false,
+        _ => reportTime.TimeOfDay >= periodStart.TimeOfDay,
+    };
+
+    private static ProjectReport BuildProject(ReportModel model, ProjectInput input, DateTime? globalChartStart)
+    {
+        var config = model.Config;
+        var reportTime = model.ReportTime;
+        var periodStart = model.PeriodStart;
         var report = new ProjectReport { Project = input.Project, Screen = input.Screen, Error = input.Error };
         report.ExpertiseEnd = ResolveExpertiseEnd(input.Project);
 
@@ -72,7 +87,7 @@ public static class ReportBuilder
         else if (report.Previous is not null && report.Previous.Timestamp != periodStart)
             report.Warnings.Add($"на начало периода использованы данные на {Formats.DateTimeText(report.Previous.Timestamp)}.");
 
-        report.PeriodLoads.AddRange(input.Screen.Loads.Where(l => l.End > periodStart && l.End <= reportTime));
+        report.PeriodLoads.AddRange(input.Screen.Loads.Where(l => model.IsReportLoad(l.End)));
 
         BuildDaily(config, report, input.Screen, reportTime, globalChartStart);
         return report;

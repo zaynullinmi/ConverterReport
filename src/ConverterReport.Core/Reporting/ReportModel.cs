@@ -40,7 +40,7 @@ public sealed class ProjectReport
 
     public RemarksSnapshot? Delta => Current is null || Previous is null ? null : Current - Previous;
 
-    /// <summary>Загрузки, завершенные в отчетном периоде.</summary>
+    /// <summary>Загрузки для раздела «1. Загрузка документов» (см. <see cref="ReportModel.LoadsFrom"/>).</summary>
     public List<DocumentLoad> PeriodLoads { get; } = new();
 
     public LoadCounts PeriodLoadsSum => PeriodLoads.Aggregate(LoadCounts.Zero, (acc, l) => acc + l.Counts);
@@ -74,6 +74,20 @@ public sealed class ReportModel
     public DateTime ReportTime { get; init; }
 
     public DateTime PeriodStart { get; init; }
+
+    /// <summary>Раздел «1. Загрузка документов» — загрузки за день (с 00:00), иначе — с начала отчетного периода.</summary>
+    public bool LoadsForDay { get; init; }
+
+    /// <summary>Начало выборки загрузок раздела 1 (по окончанию загрузки).</summary>
+    public DateTime LoadsFrom => LoadsForDay ? ReportTime.Date : PeriodStart;
+
+    /// <summary>
+    /// Загрузка попадает в раздел 1: окончание за день (с 00:00 включительно — как на диаграммах) или после начала
+    /// отчетного периода, и не позже времени отчета.
+    /// </summary>
+    public bool IsReportLoad(DateTime end) => (LoadsForDay ? end >= LoadsFrom : end > LoadsFrom) && end <= ReportTime;
+
+    public string NoLoadsText => LoadsForDay ? "За день загрузок документов не было." : "За отчетный период загрузок документов не было.";
 
     public List<ProjectReport> Projects { get; init; } = new();
 

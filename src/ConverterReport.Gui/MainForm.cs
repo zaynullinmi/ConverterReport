@@ -745,7 +745,9 @@ internal sealed class MainForm : Form
         if (!_customStart.Checked && _start.Value != start)
             _start.Value = start;
         _period.ForeColor = start < reportTime ? Color.DimGray : Color.Firebrick;
-        _period.Text = $"Отчетный период: с {Short(start)} по {Short(reportTime.Value)}";
+        var forDay = ReportBuilder.LoadsForDay(ReportLoadsConverter.FromText(_settings.ReportLoads), reportTime.Value, start);
+        _period.Text = $"Отчетный период: с {Short(start)} по {Short(reportTime.Value)}" + Environment.NewLine +
+                       (forDay ? "Загрузки в разделе 1 — за день (с 0:00)" : "Загрузки в разделе 1 — с начала периода");
     }
 
     private static string Short(DateTime value) => value.ToString("H:mm dd.MM.yyyy", Formats.Ru);

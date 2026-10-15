@@ -128,7 +128,7 @@ internal sealed class ReportDocumentBuilder
         var projects = _m.ShownProjects.Where(p => p.PeriodLoads.Count > 0 || !_s.HideProjectsWithoutLoads).ToList();
         if (_m.ShownProjects.All(p => p.PeriodLoads.Count == 0))
         {
-            section.AddParagraph("За отчетный период загрузок документов не было.");
+            section.AddParagraph(_m.NoLoadsText);
             return;
         }
 

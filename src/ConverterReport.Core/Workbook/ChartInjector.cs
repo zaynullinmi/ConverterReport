@@ -15,6 +15,7 @@ internal static class ChartInjector
     private static readonly XNamespace A = "http://schemas.openxmlformats.org/drawingml/2006/main";
     private static readonly XNamespace R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
     private static readonly XNamespace Xdr = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing";
+    private static readonly XNamespace C16R3 = "http://schemas.microsoft.com/office/drawing/2017/03/chart";
 
     public static void Inject(string path, string sheetName, IReadOnlyList<ChartPlacement> charts)
     {
@@ -187,7 +188,14 @@ internal static class ChartInjector
             chartElement.Add(new XElement(C + "legend", Val("legendPos", "b"), Val("overlay", 0), TextProps(900)));
         }
 
-        chartElement.Add(Val("plotVisOnly", 1), Val("dispBlanksAs", "gap"));
+        // «Показывать #Н/Д как пустую ячейку» (как в книге отчета): у дней без данных (будущие даты, первый день
+        // «Устранено за сутки») нет ни точки, ни подписи «#Н/Д».
+        chartElement.Add(Val("plotVisOnly", 1), Val("dispBlanksAs", "gap"),
+            new XElement(C + "extLst",
+                new XElement(C + "ext", new XAttribute("uri", "{56B9EC1D-385E-4148-901F-78D8002777C0}"),
+                    new XAttribute(XNamespace.Xmlns + "c16r3", C16R3),
+                    new XElement(C16R3 + "dataDisplayOptions16",
+                        new XElement(C16R3 + "dispNaAsBlank", new XAttribute("val", 1))))));
 
         var space = new XElement(C + "chartSpace",
             new XAttribute(XNamespace.Xmlns + "c", C), new XAttribute(XNamespace.Xmlns + "a", A), new XAttribute(XNamespace.Xmlns + "r", R),

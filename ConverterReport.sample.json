@@ -29,6 +29,7 @@
     "IncludeCharts": true,
     "IncludeDeadlines": true,
     "LoadsMode": "Sum",
+    "ReportLoads": "Auto",
     "HideProjectsWithoutLoads": true,
     "DeadlineStages": [
       "Входной контроль",

@@ -39,6 +39,7 @@ internal sealed class SettingsView
         VisibleDailySheets = r.VisibleDailySheets;
         IncludeDeadlines = r.IncludeDeadlines;
         HideProjectsWithoutLoads = r.HideProjectsWithoutLoads;
+        ReportLoads = ReportLoadsConverter.ToText(r.ReportLoads);
         DeadlineStages = string.Join("; ", r.DeadlineStages);
         LoadsMode = r.LoadsMode == Core.Configuration.LoadsMode.Each ? LoadsModeConverter.Each : LoadsModeConverter.Sum;
         FontFamily = r.FontFamily;
@@ -124,8 +125,14 @@ internal sealed class SettingsView
     [Category(Daily), DisplayName("Раздел «4. Сроки»"), TypeConverter(typeof(YesNoConverter))]
     public bool IncludeDeadlines { get; set; }
 
+    [Category(Daily), DisplayName("Загрузки в разделе 1"), TypeConverter(typeof(ReportLoadsConverter))]
+    [Description("Какие загрузки выводить в разделе «1. Загрузка документов». Авто: в вечернем отчете (время отчета не раньше " +
+                 "начала периода, 18:00) — все загрузки за день, как на диаграммах; в утреннем — только загрузки с начала периода " +
+                 "(с 18:00 прошлого дня). На диаграммах загрузки всегда за день.")]
+    public string ReportLoads { get; set; }
+
     [Category(Daily), DisplayName("Скрывать этапы без загрузок"), TypeConverter(typeof(YesNoConverter))]
-    [Description("В разделе «1. Загрузка документов» не показывать этапы, по которым за период загрузок не было.")]
+    [Description("В разделе «1. Загрузка документов» не показывать этапы, по которым загрузок не было.")]
     public bool HideProjectsWithoutLoads { get; set; }
 
     [Category(Daily), DisplayName("Стадии сроков")]
@@ -212,6 +219,7 @@ internal sealed class SettingsView
         r.VisibleDailySheets = Math.Max(0, VisibleDailySheets);
         r.IncludeDeadlines = IncludeDeadlines;
         r.HideProjectsWithoutLoads = HideProjectsWithoutLoads;
+        r.ReportLoads = ReportLoadsConverter.FromText(ReportLoads);
         r.DeadlineStages = SplitList(DeadlineStages);
         r.LoadsMode = LoadsMode == LoadsModeConverter.Each ? Core.Configuration.LoadsMode.Each : Core.Configuration.LoadsMode.Sum;
         r.FontFamily = FontFamily;
@@ -266,6 +274,29 @@ internal sealed class LoadsModeConverter : ChoiceConverter
     public const string Each = "Каждая загрузка";
 
     protected override string[] Choices => new[] { Sum, Each };
+}
+
+internal sealed class ReportLoadsConverter : ChoiceConverter
+{
+    private const string Auto = "Утром — с начала периода, вечером — за день";
+    private const string Day = "Всегда за день (с 00:00)";
+    private const string Period = "Всегда с начала периода";
+
+    protected override string[] Choices => new[] { Auto, Day, Period };
+
+    public static string ToText(ReportLoadsMode mode) => mode switch
+    {
+        ReportLoadsMode.Day => Day,
+        ReportLoadsMode.Period => Period,
+        _ => Auto,
+    };
+
+    public static ReportLoadsMode FromText(string text) => text switch
+    {
+        Day => ReportLoadsMode.Day,
+        Period => ReportLoadsMode.Period,
+        _ => ReportLoadsMode.Auto,
+    };
 }
 
 internal sealed class PaperConverter : ChoiceConverter

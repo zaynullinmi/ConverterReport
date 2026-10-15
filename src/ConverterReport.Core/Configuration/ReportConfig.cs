@@ -130,6 +130,14 @@ public sealed class ReportSettings
     /// <summary>Sum — одна строка на этап с суммой всех загрузок за период; Each — каждая загрузка отдельной строкой.</summary>
     public LoadsMode LoadsMode { get; set; } = LoadsMode.Sum;
 
+    /// <summary>
+    /// Какие загрузки выводить в разделе «1. Загрузка документов»: Auto — в вечернем отчете (время отчета не раньше
+    /// начала периода, 18:00) все загрузки за день, в утреннем — загрузки с начала отчетного периода (с 18:00
+    /// прошлого дня); Day — всегда за день; Period — всегда с начала отчетного периода. На диаграммах загрузки
+    /// всегда по дням.
+    /// </summary>
+    public ReportLoadsMode ReportLoads { get; set; } = ReportLoadsMode.Auto;
+
     /// <summary>Не выводить в таблице загрузок этапы, по которым за период загрузок не было.</summary>
     public bool HideProjectsWithoutLoads { get; set; } = true;
 
@@ -159,6 +167,14 @@ public enum LoadsMode
 {
     Sum,
     Each,
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum ReportLoadsMode
+{
+    Auto,
+    Day,
+    Period,
 }
 
 public sealed class ChartSettings

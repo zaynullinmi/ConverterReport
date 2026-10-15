@@ -108,6 +108,60 @@ public sealed class OutputSettingsTests : IDisposable
         Assert.Equal(120.0, svod.Cell(row, 7).Value.GetNumber()); // «Устранено» — строка 08:00
     }
 
+    [Theory]
+    [InlineData(18, ReportLoadsMode.Auto, 20)]   // вечер: все загрузки за день (с 00:00) — как на диаграмме
+    [InlineData(8, ReportLoadsMode.Auto, 14)]    // утро: с 18:00 прошлого дня
+    [InlineData(18, ReportLoadsMode.Period, 25)] // всегда с начала периода
+    [InlineData(8, ReportLoadsMode.Day, 9)]      // всегда за день
+    public void ReportLoadsAreForDayInEveningAndSincePeriodStartInMorning(int hour, ReportLoadsMode mode, int expected)
+    {
+        var d14 = new DateTime(2026, 10, 14);
+        var d15 = new DateTime(2026, 10, 15);
+        new TestScreen()
+            .Remarks(d14, TimeSpan.FromHours(18), (100, 50, 49, 1))
+            .Remarks(d15, TimeSpan.FromHours(8), (100, 51, 48, 1))
+            .Load(d14, new TimeSpan(10, 0, 0), d14, new TimeSpan(11, 0, 0), 300)          // до начала периода
+            .Load(d14, new TimeSpan(20, 0, 0), d14, new TimeSpan(22, 0, 0), 5)            // прошлый день после 18:00
+            .Load(d14, new TimeSpan(23, 30, 0), d15, TimeSpan.Zero, 2)                    // окончание ровно в 00:00
+            .Load(d15, new TimeSpan(7, 0, 0), d15, new TimeSpan(7, 30, 0), 0, 7)
+            .Load(d15, new TimeSpan(12, 0, 0), d15, new TimeSpan(13, 0, 0), 0, 0, 11)
+            .Load(d15, new TimeSpan(18, 30, 0), d15, new TimeSpan(19, 0, 0), 1000)        // после отчета
+            .SaveTo(_dir, "Экран 7.xlsx");
+        var config = Config();
+        config.Projects.Add(new ProjectConfig { Number = "7", ScreenFile = "Экран 7.xlsx" });
+        config.Report.ReportLoads = mode;
+        var result = Run(config, 15, hour);
+
+        Assert.Equal(expected, result.Model.Projects.Single().PeriodLoadsSum.Total);
+
+        using var wb = new XLWorkbook(result.Workbook!);
+        var daily = wb.Worksheet("15.10");
+        var forDay = expected is 20 or 9;
+        Assert.Equal(forDay ? d15 : d14, daily.Cell(5, 31).GetDateTime());
+        Assert.Contains(forDay ? ">=$AE$5+$AF$5" : ">$AE$5+$AF$5", daily.Cell(9, 28).FormulaA1);
+        Assert.Equal(expected, daily.Cell(10, 24).Value.GetNumber()); // «Всего:» раздела 1
+
+        // Вечером сумма раздела 1 совпадает с загрузками дня на диаграмме («Свод»).
+        if (hour == 18 && mode == ReportLoadsMode.Auto)
+        {
+            var svod = wb.Worksheet("Свод");
+            var row = 2 + (d15 - svod.Cell(2, 2).GetDateTime()).Days;
+            Assert.Equal(expected, svod.Cell(row, SvodLayout.Project(0).LoadTotal).Value.GetNumber());
+        }
+    }
+
+    [Fact]
+    public void ChartsShowNaAsEmptyCellLikeReportBook()
+    {
+        var result = Run(Config("3", "4"), 15, 8);
+        using var doc = SpreadsheetDocument.Open(result.Workbook!, false);
+        var xml = doc.WorkbookPart!.WorksheetParts.Single(p => p.DrawingsPart is not null).DrawingsPart!.ChartParts
+            .Select(p => new StreamReader(p.GetStream()).ReadToEnd())
+            .ToList();
+        Assert.NotEmpty(xml);
+        Assert.All(xml, x => Assert.Contains("<c16r3:dispNaAsBlank val=\"1\"", x));
+    }
+
     [Fact]
     public void OldDefaultFileNamesAreUpgraded()
     {

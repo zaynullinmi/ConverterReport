@@ -541,17 +541,20 @@ internal sealed class SummaryWorkbookBuilder
         var dFirst = _layout.DocumentsFirstRow;
         var dLast = _documentsLastRow.GetValueOrDefault(p, dFirst);
         string DR(string column) => $"{d}!${column}${dFirst}:${column}${dLast}";
-        var endDate = _layout.LoadEndDate;
+        // Загрузки за день — по окончанию загрузки (Д!X, дата и время), как в разделе 1 отчета; на отчетную дату —
+        // только завершенные до времени отчета (вечерний отчет и диаграмма показывают одну и ту же сумму).
+        var to = svodDate == _m.ReportTime.Date ? $"\"<=\"&($B{r}+$E{r}+0.000001)" : $"\"<\"&($B{r}+1)";
+        var day = $"{DR("X")},\">=\"&$B{r},{DR("X")},{to}";
         var loadCols = new[] { _layout.LoadSurvey, _layout.LoadProject, _layout.LoadEstimate, _layout.LoadVor, _layout.LoadKac, _layout.LoadOther };
         for (var i = 0; i < loadCols.Length; i++)
-            ws.Cell(r, b.Load(i)).FormulaA1 = $"SUMIFS({DR(loadCols[i])},{DR(endDate)},$B{r})";
+            ws.Cell(r, b.Load(i)).FormulaA1 = $"SUMIFS({DR(loadCols[i])},{day})";
         ws.Cell(r, b.LoadTotal).FormulaA1 = $"SUM({C(b.Load(0))}{r}:{C(b.Load(5))}{r})";
         var extra = new[] { _layout.LoadAnswers, _layout.LoadCancelled, _layout.LoadErrors };
         for (var i = 0; i < extra.Length; i++)
         {
             if (string.IsNullOrWhiteSpace(extra[i]))
                 continue;
-            ws.Cell(r, b.Load(7 + i)).FormulaA1 = $"SUMIFS({DR(extra[i])},{DR(endDate)},$B{r})";
+            ws.Cell(r, b.Load(7 + i)).FormulaA1 = $"SUMIFS({DR(extra[i])},{day})";
         }
     }
 
@@ -628,7 +631,14 @@ internal sealed class SummaryWorkbookBuilder
         // --- 1. Загрузка документов.
         ws.Cell(5, 1).Value = "1. Загрузка документов в АИС ГГЭ.";
         ws.Cell(5, 1).Style.Font.Bold = true;
-        Converter(ws, 5, "II.", "Конвертер - Документы (сумма загрузок за отчетный период)");
+        // AE5+AF5 — начало выборки загрузок: за день (с 00:00) или с начала отчетного периода (настройка ReportLoads).
+        Converter(ws, 5, "II.", "Конвертер - Документы: загрузки с");
+        ws.Cell(5, 31).Value = _m.LoadsFrom.Date;
+        ws.Cell(5, 32).Value = _m.LoadsFrom.TimeOfDay.TotalDays;
+        ws.Cell(5, 31).Style.NumberFormat.Format = XlStyle.DateFormat;
+        ws.Cell(5, 32).Style.NumberFormat.Format = XlStyle.TimeFormat;
+        ws.Cell(5, 34).Value = _m.LoadsForDay ? "(за день)" : "(с начала отчетного периода)";
+        ws.Range(5, 31, 5, 34).Style.Font.FontSize = 11;
         ws.Row(5).Height = 18;
         ws.Row(6).Height = 9;
 
@@ -692,7 +702,7 @@ internal sealed class SummaryWorkbookBuilder
         ConverterLoadsTotal(ws, t1, first1, n);
         if (_projects.All(p => p.PeriodLoads.Count == 0))
         {
-            ws.Put(t1 + 1, 1, t1 + 1, 26, "За отчетный период загрузок документов не было.").Set(12, italic: true, align: XLAlignmentHorizontalValues.Left);
+            ws.Put(t1 + 1, 1, t1 + 1, 26, _m.NoLoadsText).Set(12, italic: true, align: XLAlignmentHorizontalValues.Left);
         }
 
         // --- 2. Устранение замечаний.
@@ -839,14 +849,18 @@ internal sealed class SummaryWorkbookBuilder
         range.Style.Alignment.WrapText = true;
     }
 
-    /// <summary>Блок «Конвертер - Документы»: загрузки этапа, окончание которых попадает в отчетный период (AE3+AF3; AE4+AF4].</summary>
+    /// <summary>
+    /// Блок «Конвертер - Документы»: загрузки этапа, окончание которых попадает в выборку раздела 1:
+    /// [AE5+AF5; AE4+AF4] за день или (AE5+AF5; AE4+AF4] с начала периода.
+    /// </summary>
     private void ConverterLoadsRow(IXLWorksheet ws, int r, ProjectReport p)
     {
         var d = D(p);
         var last = _documentsLastRow.GetValueOrDefault(p, _layout.DocumentsFirstRow);
         var first = _layout.DocumentsFirstRow;
         string Rng(string col) => $"{d}!${col}${first}:${col}${last}";
-        var cond = $"(({Rng("X")}>$AE$3+$AF$3)*({Rng("X")}<=$AE$4+$AF$4))";
+        var from = _m.LoadsForDay ? ">=" : ">";
+        var cond = $"(({Rng("X")}{from}$AE$5+$AF$5)*({Rng("X")}<=$AE$4+$AF$4))";
 
         ws.Cell(r, 27).Value = XlStyle.StageCell(p.Number);
         ws.Cell(r, 28).FormulaA1 = $"SUMPRODUCT({cond}*1)";
