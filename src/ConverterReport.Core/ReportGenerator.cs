@@ -45,6 +45,9 @@ public sealed class RunResult
     public IEnumerable<string> Files => (Workbook is null ? Enumerable.Empty<string>() : new[] { Workbook }).Concat(Pdfs);
 
     public List<string> Warnings { get; } = new();
+
+    /// <summary>Сроки этапов, взятые из старой книги (в настройках их не было) — номер этапа → стадия → даты.</summary>
+    public Dictionary<string, Dictionary<string, List<string>>> FilledDeadlines { get; } = new();
 }
 
 public sealed class ConfigurationException : Exception
@@ -87,10 +90,16 @@ public sealed class ReportGenerator
         if (inputs.All(i => i.Screen is null))
             throw new InvalidOperationException("Не удалось прочитать ни один файл экрана — отчет не сформирован.");
 
+        var early = new List<string>();
+        using var legacy = OpenLegacy(config, early);
+        var filled = FillDeadlines(config, legacy, reportTime.Date, early);
+
         var notes = ReadNotes(config).Concat(options.ExtraNotes).ToList();
         var model = ReportBuilder.Build(config, inputs, reportTime, periodStart, notes);
         var result = new RunResult { Model = model };
-        foreach (var w in model.AllWarnings)
+        foreach (var (number, deadlines) in filled)
+            result.FilledDeadlines[number] = deadlines;
+        foreach (var w in early.Concat(model.AllWarnings))
         {
             result.Warnings.Add(w);
             _warn(w);
@@ -114,8 +123,15 @@ public sealed class ReportGenerator
             var master = MasterPath(config.Report.MasterWorkbook, folder, reportTime, names);
             try
             {
-                workbook = SummaryWorkbookWriter.Append(model, master, config.Report.VisibleDailySheets);
+                workbook = SummaryWorkbookWriter.Append(model, master, config.Report.VisibleDailySheets, legacy);
                 _info($"Лист «{workbook.DailySheet}» записан в общую книгу: {master}");
+                if (workbook.ImportedSheets > 0)
+                    _info($"Из старой книги перенесено листов прошлых дней: {workbook.ImportedSheets}.");
+                if (workbook.LegacyWarning is { } legacyWarning)
+                {
+                    result.Warnings.Add(legacyWarning);
+                    _warn(legacyWarning);
+                }
             }
             catch (MasterWorkbookException ex)
             {
@@ -139,7 +155,7 @@ public sealed class ReportGenerator
         var jobs = new List<(string Kind, SheetPdf Job)>();
         if (config.Report.IncludeDaily)
             jobs.Add(("daily", new SheetPdf(workbook.DailySheet, FileFor(config.Report.FileName, ".pdf"))));
-        if (config.Report.IncludeDetailed && model.Projects.Any(p => p.Current is not null))
+        if (config.Report.IncludeDetailed && model.ShownProjects.Any(p => p.Current is not null))
             jobs.Add(("detailed", new SheetPdf(SummaryWorkbook.DetailedSheet, FileFor(config.Report.DetailedFileName, ".pdf"))));
         if (config.Report.IncludeCharts && workbook.ChartPages > 0)
             jobs.Add(("charts", new SheetPdf(SummaryWorkbook.ChartsSheet, FileFor(config.Report.ChartsFileName, ".pdf"))));
@@ -238,6 +254,49 @@ public sealed class ReportGenerator
         }
 
         return inputs.ToList();
+    }
+
+    /// <summary>Старая книга для переноса листов прошлых дней и сроков (если включено в настройках и файл есть).</summary>
+    private LegacySource? OpenLegacy(ReportConfig config, List<string> warnings)
+    {
+        var r = config.Report;
+        if (!r.ImportLegacyDays || string.IsNullOrWhiteSpace(r.LegacyWorkbook))
+            return null;
+        var path = config.ResolvePath(r.LegacyWorkbook);
+        if (File.Exists(path))
+            return new LegacySource(path);
+        warnings.Add($"Старая книга не найдена: {path} — листы прошлых дней не перенесены.");
+        return null;
+    }
+
+    /// <summary>Сроки этапов, не заполненные в настройках, — из последнего листа дня старой книги.</summary>
+    private Dictionary<string, Dictionary<string, List<string>>> FillDeadlines(ReportConfig config, LegacySource? legacy, DateTime reportDate, List<string> warnings)
+    {
+        var filled = new Dictionary<string, Dictionary<string, List<string>>>();
+        var empty = config.EnabledProjects.Where(p => p.Deadlines.Count == 0).ToList();
+        if (legacy is null || empty.Count == 0)
+            return filled;
+        try
+        {
+            var sheet = LegacyWorkbook.LastDailySheet(legacy.Book, reportDate);
+            if (sheet is null)
+                return filled;
+            var found = LegacyWorkbook.ReadDeadlines(sheet);
+            foreach (var project in empty)
+            {
+                if (!found.TryGetValue(project.Number.Trim(), out var deadlines))
+                    continue;
+                project.Deadlines = deadlines;
+                filled[project.Number] = deadlines;
+                _info($"Этап {project.Number}: сроки взяты из старой книги (лист {sheet.Name}).");
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            warnings.Add($"Не удалось прочитать сроки из старой книги {legacy.Path}: {ex.Message}");
+        }
+
+        return filled;
     }
 
     /// <summary>Файл общей книги: относительно папки отчетов (или полный путь), с подстановками, расширение .xlsx.</summary>

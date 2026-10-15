@@ -65,11 +65,24 @@ public sealed class ReportSettings
     /// Имена файлов (без расширения). Подстановки: {date:формат}, {time:формат}, {projects} («2-4, 9»),
     /// {projectsShort} («2-4,9»), {version}.
     /// </summary>
-    public string FileName { get; set; } = "{date:yyyy.MM.dd} {time:H.mm} Суточный {projectsShort} этапы {version}";
+    public string FileName { get; set; } = DefaultFileName;
 
-    public string DetailedFileName { get; set; } = "{date:yyyy.MM.dd} {time:H.mm} Суточный {projectsShort} этапы {version} (дет)";
+    public string DetailedFileName { get; set; } = DefaultDetailedFileName;
 
-    public string ChartsFileName { get; set; } = "{date:yyyy.MM.dd} {time:H.mm} Суточный {projectsShort} этапы {version} Диаграммы";
+    public string ChartsFileName { get; set; } = DefaultChartsFileName;
+
+    // Имена PDF — как при ручном сохранении: «2026.10.15 8.00 Свод ГГЭ 2-4,9 этапы 1.0 [Отчет|Диаграммы].pdf».
+    internal const string DefaultFileName = "{date:yyyy.MM.dd} {time:H.mm} Свод ГГЭ {projectsShort} этапы {version}";
+    internal const string DefaultDetailedFileName = DefaultFileName + " Отчет";
+    internal const string DefaultChartsFileName = DefaultFileName + " Диаграммы";
+
+    /// <summary>Имена по умолчанию версий 2.0.4–2.0.10 — при загрузке настроек заменяются на текущие.</summary>
+    internal static readonly Dictionary<string, string> ObsoleteFileNames = new()
+    {
+        ["{date:yyyy.MM.dd} {time:H.mm} Суточный {projectsShort} этапы {version}"] = DefaultFileName,
+        ["{date:yyyy.MM.dd} {time:H.mm} Суточный {projectsShort} этапы {version} (дет)"] = DefaultDetailedFileName,
+        ["{date:yyyy.MM.dd} {time:H.mm} Суточный {projectsShort} этапы {version} Диаграммы"] = DefaultChartsFileName,
+    };
 
     /// <summary>Сводная книга Excel (.xlsx) со всеми листами, формулами и диаграммами.</summary>
     public string WorkbookFileName { get; set; } = "{date:yyyy.MM.dd} {time:H.mm} Сводный отчет ГГЭ {projectsShort} этапы ВСМ-1 {version}";
@@ -85,6 +98,16 @@ public sealed class ReportSettings
 
     /// <summary>Сколько последних листов дней оставлять видимыми в общей книге; остальные скрываются (0 — показывать все).</summary>
     public int VisibleDailySheets { get; set; } = 2;
+
+    /// <summary>
+    /// Переносить в общую книгу листы прошлых дней из старой книги (которую вела версия 1.2.2): при каждом формировании
+    /// добавляются листы «ДД.ММ», которых в общей книге еще нет. Сроки этапов, не заполненные в настройках, берутся
+    /// из последнего листа старой книги.
+    /// </summary>
+    public bool ImportLegacyDays { get; set; }
+
+    /// <summary>Старая книга (путь относительно файла настроек или полный).</summary>
+    public string? LegacyWorkbook { get; set; }
 
     /// <summary>
     /// Чем сохранять PDF: Auto — через Excel, если он установлен (вид как при ручном сохранении), иначе встроенным генератором;
@@ -164,6 +187,14 @@ public sealed class ChartSettings
 
     public DataLabelsMode DataLabels { get; set; } = DataLabelsMode.Auto;
 
+    /// <summary>
+    /// Верх шкалы диаграммы загрузок документов: сводной и по этапам (0 — автоматически). Для этапа можно задать свой
+    /// (<see cref="ProjectConfig.LoadsAxisMax"/>). Колонки выше предела обрезаются, значение пишется сбоку у верхнего края.
+    /// </summary>
+    public int LoadsAxisMaxSummary { get; set; } = 500;
+
+    public int LoadsAxisMaxProject { get; set; } = 250;
+
     public string FontFamily { get; set; } = "Arial";
 }
 
@@ -188,7 +219,14 @@ public sealed class ProjectConfig
     /// <summary>Путь к файлу «Экран» этапа (листы «Замечания» и «Документы»).</summary>
     public string ScreenFile { get; set; } = "";
 
+    /// <summary>Экран этапа читается (этап учитывается в сводной диаграмме и листе «Свод»).</summary>
     public bool Enabled { get; set; } = true;
+
+    /// <summary>Выводить этап в листах отчета («ДД.ММ», «Отчет_дет», «Отчет») и отдельной страницей диаграмм.</summary>
+    public bool ShowInReport { get; set; } = true;
+
+    /// <summary>Верх шкалы диаграммы загрузок этапа; пусто — общий (<see cref="ChartSettings.LoadsAxisMaxProject"/>).</summary>
+    public int? LoadsAxisMax { get; set; }
 
     /// <summary>Дата начала диаграмм для этапа (дд.мм.гггг), перекрывает общую.</summary>
     public string? ChartStartDate { get; set; }

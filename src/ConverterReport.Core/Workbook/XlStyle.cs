@@ -11,11 +11,14 @@ internal static class XlStyle
     public const string DateTimeFormat = "dd.mm.yyyy h:mm";
     public const string IntFormat = "#,##0";
     public const string PercentFormat = "0.0";
+    public const string GeneralFormat = "General";
 
     public static readonly XLColor Total = XLColor.FromHtml("#806000");
     public static readonly XLColor Fixed = XLColor.FromHtml("#00B050");
     public static readonly XLColor Fixing = XLColor.FromHtml("#FF0000");
     public static readonly XLColor Review = XLColor.FromHtml("#0070C0");
+    public static readonly XLColor ReviewLight = XLColor.FromHtml("#5B9BD5");
+    public static readonly XLColor CurrentStageBorder = XLColor.FromHtml("#00B050");
     public static readonly XLColor PercentFill = XLColor.FromHtml("#F2F2F2");
     public static readonly XLColor ErrorFill = XLColor.FromHtml("#FFC7CE");
     public static readonly XLColor CurrentStageFill = XLColor.FromHtml("#E2EFDA");
@@ -80,6 +83,30 @@ internal static class XlStyle
     }
 
     public static IXLRange Put(this IXLWorksheet ws, int row, int c1, int c2, object? value) => ws.Put(row, c1, row, c2, value);
+
+    /// <summary>
+    /// Ширина столбца как в Excel. ClosedXML при сохранении прибавляет к ширине отступ 0,71 — без поправки лист
+    /// получается шире, а при печати «по ширине страницы» все мельче, чем в книге отчета.
+    /// </summary>
+    public static void Width(this IXLWorksheet ws, int column, double excelWidth) =>
+        ws.Column(column).Width = Math.Max(0, excelWidth - 0.71);
+
+    /// <summary>Вертикальная линия перед столбцом <paramref name="column"/> в строках r1..r2.</summary>
+    public static void VLine(this IXLWorksheet ws, int r1, int r2, int column, XLBorderStyleValues style, XLColor? color = null)
+    {
+        if (r2 < r1)
+            return;
+        var right = ws.Range(r1, column, r2, column).Style.Border;
+        right.LeftBorder = style;
+        if (color is not null)
+            right.LeftBorderColor = color;
+        if (column <= 1)
+            return;
+        var left = ws.Range(r1, column - 1, r2, column - 1).Style.Border;
+        left.RightBorder = style;
+        if (color is not null)
+            left.RightBorderColor = color;
+    }
 
     public static void Box(this IXLRange range, XLBorderStyleValues outside = XLBorderStyleValues.Medium, XLBorderStyleValues inside = XLBorderStyleValues.Thin)
     {

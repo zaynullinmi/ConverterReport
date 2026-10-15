@@ -14,12 +14,14 @@ internal sealed class MainForm : Form
 {
     // Колонки таблицы этапов.
     private const int ColEnabled = 0;
-    private const int ColNumber = 1;
-    private const int ColName = 2;
-    private const int ColFile = 3;
-    private const int ColBrowse = 4;
-    private const int ColEnd = 5;
-    private const int ColChartStart = 6;
+    private const int ColShow = 1;
+    private const int ColNumber = 2;
+    private const int ColName = 3;
+    private const int ColFile = 4;
+    private const int ColBrowse = 5;
+    private const int ColEnd = 6;
+    private const int ColChartStart = 7;
+    private const int ColLoadsMax = 8;
 
     private readonly CommandLineOptions _options;
     private string _configPath;
@@ -48,6 +50,9 @@ internal sealed class MainForm : Form
     private RadioButton _bookAppend = null!;
     private TextBox _masterPath = null!;
     private Button _masterBrowse = null!;
+    private CheckBox _legacy = null!;
+    private TextBox _legacyPath = null!;
+    private Button _legacyBrowse = null!;
     private TextBox _notes = null!;
     private Button _run = null!;
     private ProgressBar _progress = null!;
@@ -234,19 +239,33 @@ internal sealed class MainForm : Form
         _masterBrowse = new Button { Text = "Обзор…", AutoSize = true };
         _masterBrowse.Click += (_, _) => BrowseMasterWorkbook();
         _masterPath.TextChanged += (_, _) => MarkDirty();
+        _legacy = new CheckBox { Text = "Переносить листы прошлых дней из старой книги:", AutoSize = true, Margin = new Padding(23, 6, 3, 3) };
+        _legacyPath = new TextBox { Width = 330 };
+        _legacyBrowse = new Button { Text = "Обзор…", AutoSize = true };
+        _legacyBrowse.Click += (_, _) => BrowseLegacyWorkbook();
+        _legacyPath.TextChanged += (_, _) => MarkDirty();
+        _legacy.CheckedChanged += (_, _) =>
+        {
+            UpdateBookControls();
+            MarkDirty();
+        };
         foreach (var r in new[] { _bookSeparate, _bookAppend })
         {
             r.CheckedChanged += (_, _) =>
             {
-                _masterPath.Enabled = _masterBrowse.Enabled = _bookAppend.Checked;
+                UpdateBookControls();
                 MarkDirty();
             };
         }
 
         var bookHint = Hint("Общая книга: если файла нет — он будет создан; прежние листы дней сохраняются, видны последние (сколько — на вкладке «Настройки»). " +
-                            "Относительный путь — от папки отчетов.");
+                            "Относительный путь — от папки отчетов. Старая книга (версии 1.2.2) только читается: недостающие листы прошлых дней переносятся " +
+                            "в общую книгу при каждом формировании, а незаполненные сроки этапов берутся из ее последнего листа.");
         bookHint.MaximumSize = new Size(980, 0);
-        var bookBox = Group("Сводная книга Excel", Stack(Row(_bookSeparate, _bookAppend, _masterPath, _masterBrowse), bookHint));
+        var bookBox = Group("Сводная книга Excel", Stack(
+            Row(_bookSeparate, _bookAppend, _masterPath, _masterBrowse),
+            Row(_legacy, _legacyPath, _legacyBrowse),
+            bookHint));
 
         parameters.Controls.Add(dateBox, 0, 0);
         parameters.Controls.Add(folderBox, 0, 1);
@@ -326,15 +345,20 @@ internal sealed class MainForm : Form
             ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize,
         };
         _projects.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Вкл.", Width = 45 });
-        _projects.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Этап", Width = 60 });
+        _projects.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "В отчете", Width = 60 });
+        _projects.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Этап", Width = 55 });
         _projects.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Название на диаграммах", Width = 170 });
         _projects.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Файл экрана", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, MinimumWidth = 200 });
         _projects.Columns.Add(new DataGridViewButtonColumn { HeaderText = "", Text = "Обзор…", UseColumnTextForButtonValue = true, Width = 75 });
         _projects.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Окончание экспертизы", Width = 150 });
-        _projects.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Начало диаграмм", Width = 130 });
+        _projects.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Начало диаграмм", Width = 110 });
+        _projects.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Верх шкалы загрузок", Width = 95 });
         _projects.Columns[ColName].ToolTipText = "Если пусто — «N этап».";
         _projects.Columns[ColEnd].ToolTipText = "дд.мм.гггг. Если пусто — наибольшая дата из сроков этапа.";
         _projects.Columns[ColChartStart].ToolTipText = "дд.мм.гггг. Если пусто — с первой заполненной строки экрана после начала сроков.";
+        _projects.Columns[ColEnabled].ToolTipText = "Экран этапа читается: этап учитывается в сводной диаграмме и листе «Свод».";
+        _projects.Columns[ColShow].ToolTipText = "Этап выводится в листах отчета и отдельной страницей диаграмм. Если снять — этап будет только на сводной диаграмме.";
+        _projects.Columns[ColLoadsMax].ToolTipText = "Верх шкалы диаграммы загрузок этапа. Пусто — общий (вкладка «Настройки»), 0 — автоматически.";
         _projects.CellContentClick += OnProjectCellClick;
         _projects.CellValueChanged += (_, e) =>
         {
@@ -508,7 +532,9 @@ internal sealed class MainForm : Form
             _bookAppend.Checked = r.WorkbookMode == WorkbookMode.Append;
             _bookSeparate.Checked = !_bookAppend.Checked;
             _masterPath.Text = r.MasterWorkbook;
-            _masterPath.Enabled = _masterBrowse.Enabled = _bookAppend.Checked;
+            _legacy.Checked = r.ImportLegacyDays;
+            _legacyPath.Text = r.LegacyWorkbook ?? "";
+            UpdateBookControls();
             _notes.Text = _notesLoaded = ReadNotesText();
 
             _projects.Rows.Clear();
@@ -544,6 +570,8 @@ internal sealed class MainForm : Form
         r.PdfEngine = _engineExcel.Checked ? PdfEngine.Excel : _engineBuiltin.Checked ? PdfEngine.Builtin : PdfEngine.Auto;
         r.WorkbookMode = _bookAppend.Checked ? WorkbookMode.Append : WorkbookMode.Separate;
         r.MasterWorkbook = string.IsNullOrWhiteSpace(_masterPath.Text) ? new ReportSettings().MasterWorkbook : _masterPath.Text.Trim();
+        r.ImportLegacyDays = _legacy.Checked;
+        r.LegacyWorkbook = string.IsNullOrWhiteSpace(_legacyPath.Text) ? null : _legacyPath.Text.Trim();
 
         _config.Projects = _projects.Rows.Cast<DataGridViewRow>().Select(row =>
         {
@@ -551,6 +579,8 @@ internal sealed class MainForm : Form
             return new ProjectConfig
             {
                 Enabled = row.Cells[ColEnabled].Value is true,
+                ShowInReport = row.Cells[ColShow].Value is true,
+                LoadsAxisMax = int.TryParse(Cell(row, ColLoadsMax), out var max) ? max : null,
                 Number = Cell(row, ColNumber),
                 Name = NullIfEmpty(Cell(row, ColName)),
                 ScreenFile = Cell(row, ColFile),
@@ -813,9 +843,30 @@ internal sealed class MainForm : Form
 
         _last = result;
         SetResultButtons();
+        ApplyFilledDeadlines(result!);
         var warnings = result!.Warnings.Count;
         AppendLog(warnings > 0 ? $"Готово. Предупреждений: {warnings}." : "Готово.", Color.ForestGreen);
         _runState.Text = $"Готово: {DateTime.Now:HH:mm}" + (warnings > 0 ? $", предупреждений: {warnings}" : "");
+    }
+
+    /// <summary>Сроки, взятые из старой книги, — в таблицу этапов и в файл настроек.</summary>
+    private void ApplyFilledDeadlines(RunResult result)
+    {
+        if (result.FilledDeadlines.Count == 0)
+            return;
+        CommitDeadlines();
+        foreach (DataGridViewRow row in _projects.Rows)
+        {
+            if (row.Tag is ProjectConfig project && project.Deadlines.Count == 0 &&
+                result.FilledDeadlines.TryGetValue(Cell(row, ColNumber), out var deadlines))
+                project.Deadlines = deadlines.ToDictionary(kv => kv.Key, kv => kv.Value.ToList());
+        }
+
+        var shown = _deadlinesProject;
+        _deadlinesProject = null;
+        ShowDeadlines(shown ?? SelectedProject());
+        AppendLog($"Сроки этапов {string.Join(", ", result.FilledDeadlines.Keys)} взяты из старой книги и сохранены в настройки.", Color.DimGray);
+        SaveConfig(showStatus: false);
     }
 
     private void SetRunning(bool running)
@@ -885,6 +936,41 @@ internal sealed class MainForm : Form
             _outFolder.Text = dialog.SelectedPath;
     }
 
+    private void UpdateBookControls()
+    {
+        _masterPath.Enabled = _masterBrowse.Enabled = _bookAppend.Checked;
+        _legacy.Enabled = _bookAppend.Checked;
+        _legacyPath.Enabled = _legacyBrowse.Enabled = _bookAppend.Checked && _legacy.Checked;
+    }
+
+    private void BrowseLegacyWorkbook()
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Title = "Старая книга отчета (версии 1.2.2)",
+            Filter = "Книги Excel (*.xlsx;*.xlsm)|*.xlsx;*.xlsm|Все файлы|*.*",
+        };
+        try
+        {
+            if (_legacyPath.Text.Trim().Length > 0)
+            {
+                var full = _config.ResolvePath(_legacyPath.Text);
+                dialog.InitialDirectory = Path.GetDirectoryName(full);
+                dialog.FileName = Path.GetFileName(full);
+            }
+        }
+        catch
+        {
+            // Некорректный путь — диалог откроется по умолчанию.
+        }
+
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+        {
+            _legacyPath.Text = dialog.FileName;
+            _legacy.Checked = true;
+        }
+    }
+
     private void BrowseMasterWorkbook()
     {
         string folder;
@@ -923,7 +1009,8 @@ internal sealed class MainForm : Form
         {
             Deadlines = p.Deadlines.ToDictionary(kv => kv.Key, kv => kv.Value.ToList()),
         };
-        var index = _projects.Rows.Add(p.Enabled, p.Number, p.Name ?? "", p.ScreenFile, null, p.ExpertiseEndDate ?? "", p.ChartStartDate ?? "");
+        var index = _projects.Rows.Add(p.Enabled, p.ShowInReport, p.Number, p.Name ?? "", p.ScreenFile, null, p.ExpertiseEndDate ?? "", p.ChartStartDate ?? "",
+            p.LoadsAxisMax?.ToString() ?? "");
         _projects.Rows[index].Tag = copy;
     }
 

@@ -120,7 +120,11 @@ public static class ReportBuilder
             var point = new DailyPoint { Date = d };
             if (d <= reportDate)
             {
-                if (lastByDay.TryGetValue(d, out var snap))
+                // На отчетную дату, если в этот день строк еще нет, — последняя заполненная строка (как в таблице отчета),
+                // иначе сводная диаграмма «проваливается» в последний день.
+                if (!lastByDay.TryGetValue(d, out var snap) && d == reportDate && snapshots.Count > 0)
+                    snap = snapshots[^1];
+                if (snap is not null)
                 {
                     point.Remarks = snap.All[0];
                     point.FixedPerDay = previous is null ? null : snap.All[0].Fixed - previous.Value.Fixed;

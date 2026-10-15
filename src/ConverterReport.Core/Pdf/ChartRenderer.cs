@@ -32,6 +32,9 @@ internal sealed class ChartSpec
 
     /// <summary>Формат подписей дат; «ddd» — день недели.</summary>
     public string DateFormat { get; init; } = "dd.MM";
+
+    /// <summary>Верх шкалы (null — автоматически). Столбцы выше обрезаются, значение пишется сбоку у верхнего края.</summary>
+    public double? AxisMax { get; init; }
 }
 
 /// <summary>
@@ -90,10 +93,12 @@ internal sealed class ChartRenderer
             }
         }
 
+        if (spec.AxisMax is > 0)
+            max = spec.AxisMax.Value;
         if (max <= min)
             max = min + 1;
         var step = NiceStep((max - min) / 6);
-        var yMax = Math.Ceiling(max * 1.08 / step) * step;
+        var yMax = spec.AxisMax is > 0 ? spec.AxisMax.Value : Math.Ceiling(max * 1.08 / step) * step;
         var yMin = Math.Floor(min / step) * step;
         if (yMax <= yMin)
             yMax = yMin + step;
@@ -122,7 +127,7 @@ internal sealed class ChartRenderer
         if (plot.Width <= 10 || plot.Height <= 10)
             return;
 
-        double Y(double v) => plot.Bottom - (v - yMin) / (yMax - yMin) * plot.Height;
+        double Y(double v) => plot.Bottom - (Math.Min(v, yMax) - yMin) / (yMax - yMin) * plot.Height;
         var slot = plot.Width / n;
         double X(int i) => plot.X + slot * (i + 0.5);
 
@@ -263,6 +268,13 @@ internal sealed class ChartRenderer
             if (spec.Labels == DataLabelsMode.Last && !isReport)
                 continue;
             var size = gfx.MeasureString(text, font);
+            if (spec.AxisMax is { } top && v > top)
+            {
+                // Выше верха шкалы: столбец обрезан, значение — сбоку от него у верхнего края.
+                TextRotated(gfx, text, font, Brush(bar.Color), x(i) + slot / 3 + 1, y(top) + 2, 1, 0);
+                continue;
+            }
+
             if (size.Width <= slot * 0.95 || isReport)
                 Text(gfx, text, font, Brush(bar.Color), x(i), y(v) - 1.5, 0.5, 1);
             else if (size.Height <= slot * 1.15 || spec.Labels == DataLabelsMode.All)

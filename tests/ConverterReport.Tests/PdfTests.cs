@@ -52,9 +52,9 @@ public sealed class PdfTests : IDisposable
 
         Assert.EndsWith("2026.10.15 8.00 Сводный отчет ГГЭ 1-8 этапы ВСМ-1 1.0.xlsx", result.Workbook);
         Assert.Equal(3, result.Pdfs.Count);
-        Assert.EndsWith("2026.10.15 8.00 Суточный 1-8 этапы 1.0.pdf", result.Pdfs[0]);
-        Assert.EndsWith("2026.10.15 8.00 Суточный 1-8 этапы 1.0 (дет).pdf", result.Pdfs[1]);
-        Assert.EndsWith("2026.10.15 8.00 Суточный 1-8 этапы 1.0 Диаграммы.pdf", result.Pdfs[2]);
+        Assert.EndsWith("2026.10.15 8.00 Свод ГГЭ 1-8 этапы 1.0.pdf", result.Pdfs[0]);
+        Assert.EndsWith("2026.10.15 8.00 Свод ГГЭ 1-8 этапы 1.0 Отчет.pdf", result.Pdfs[1]);
+        Assert.EndsWith("2026.10.15 8.00 Свод ГГЭ 1-8 этапы 1.0 Диаграммы.pdf", result.Pdfs[2]);
         Assert.Contains(result.Warnings, w => w.StartsWith("Этап 8:"));
 
         using (var daily = PdfReader.Open(result.Pdfs[0], PdfDocumentOpenMode.Import))

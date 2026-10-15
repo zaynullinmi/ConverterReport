@@ -126,27 +126,37 @@ internal static class ChartInjector
     };
 
     // ------------------------------------------------------------------ chartSpace
+    // Оформление — как у диаграмм книги отчета: подписи 9 пт, шкала замечаний от 0, область построения
+    // растянута на всю диаграмму, у сводной диаграммы нет линий тренда.
+
+    private const int MainCategoryAxis = 50010;
+    private const int MainValueAxis = 50020;
+    private const int MarkerCategoryAxis = 50030;
+    private const int MarkerValueAxis = 50040;
+    private const int MarkerSeriesIndex = 20;
 
     private static XDocument ChartXml(ChartPlacement chart)
     {
-        var plot = new XElement(C + "plotArea", new XElement(C + "layout"));
+        var remarks = chart.Kind == ChartKind.Remarks;
+        var plot = new XElement(C + "plotArea", remarks
+            ? ManualLayout(0.028, 0.075, 0.963, 0.73)
+            : ManualLayout(0.028, 0.13, 0.963, 0.63));
         var bars = chart.Series.Where(s => !s.IsLine).ToList();
         var lines = chart.Series.Where(s => s.IsLine).ToList();
-        var stacked = chart.Kind == ChartKind.Remarks;
         var index = 0;
 
         if (bars.Count > 0)
         {
             var bar = new XElement(C + "barChart",
                 Val("barDir", "col"),
-                Val("grouping", stacked ? "stacked" : "clustered"),
+                Val("grouping", remarks ? "stacked" : "clustered"),
                 Val("varyColors", 0));
             foreach (var s in bars)
-                bar.Add(BarSeries(s, chart, index++, stacked));
-            bar.Add(Val("gapWidth", stacked ? 50 : 60));
-            if (stacked)
+                bar.Add(BarSeries(s, chart, index++));
+            bar.Add(Val("gapWidth", remarks ? 50 : 150));
+            if (remarks)
                 bar.Add(Val("overlap", 100));
-            bar.Add(Val("axId", 50010), Val("axId", 50020));
+            bar.Add(Val("axId", MainCategoryAxis), Val("axId", MainValueAxis));
             plot.Add(bar);
         }
 
@@ -155,18 +165,28 @@ internal static class ChartInjector
             var line = new XElement(C + "lineChart", Val("grouping", "standard"), Val("varyColors", 0));
             foreach (var s in lines)
                 line.Add(LineSeries(s, chart, index++));
-            line.Add(Val("marker", 1), Val("axId", 50010), Val("axId", 50020));
+            line.Add(Val("marker", 1), Val("axId", MainCategoryAxis), Val("axId", MainValueAxis));
             plot.Add(line);
         }
 
-        plot.Add(CategoryAxis(), ValueAxis());
+        var marker = chart.MarkerIndex is { } m && m >= 0 && m < chart.CategoryCount;
+        if (marker)
+            plot.Add(MarkerChart(chart));
+
+        plot.Add(CategoryAxis(MainCategoryAxis, MainValueAxis, deleted: false),
+            ValueAxis(MainValueAxis, MainCategoryAxis, min: 0, max: chart.AxisMax, format: remarks ? "General" : "#,##0", deleted: false));
+        if (marker)
+            plot.Add(CategoryAxis(MarkerCategoryAxis, MarkerValueAxis, deleted: true), ValueAxis(MarkerValueAxis, MarkerCategoryAxis, min: 0, max: 1, format: "General", deleted: true));
 
         var chartElement = new XElement(C + "chart");
         if (!string.IsNullOrEmpty(chart.Title))
             chartElement.Add(Title(chart.Title));
         chartElement.Add(Val("autoTitleDeleted", string.IsNullOrEmpty(chart.Title) ? 1 : 0), plot);
-        if (chart.Kind == ChartKind.Remarks)
+        if (remarks)
+        {
             chartElement.Add(new XElement(C + "legend", Val("legendPos", "b"), Val("overlay", 0), TextProps(900)));
+        }
+
         chartElement.Add(Val("plotVisOnly", 1), Val("dispBlanksAs", "gap"));
 
         var space = new XElement(C + "chartSpace",
@@ -182,11 +202,29 @@ internal static class ChartInjector
         return new XDocument(new XDeclaration("1.0", "UTF-8", "yes"), space);
     }
 
-    private static XElement BarSeries(ChartSeriesRef s, ChartPlacement chart, int index, bool stacked)
+    private static XElement ManualLayout(double x, double y, double w, double h) =>
+        new(C + "layout", new XElement(C + "manualLayout",
+            Val("layoutTarget", "inner"), Val("xMode", "edge"), Val("yMode", "edge"),
+            Val("x", x), Val("y", y), Val("w", w), Val("h", h)));
+
+    private static XElement BarSeries(ChartSeriesRef s, ChartPlacement chart, int index)
     {
-        var labels = stacked
-            ? Labels("ctr", 600, rotate: true, bold: false, color: s.Color == "0070C0" ? "FFFFFF" : (s.Color == "FF9999" ? "C00000" : "375623"))
-            : Labels("outEnd", 700, rotate: true, bold: true, color: "2F5597");
+        XElement labels;
+        if (chart.Kind == ChartKind.Loads)
+        {
+            // Подпись колонки выше верха шкалы Excel сам переносит внутрь диаграммы, сбоку у верхнего края (как в книге отчета).
+            labels = Labels(null, 900, rotate: true, bold: false, color: "0070C0");
+        }
+        else
+        {
+            labels = s.Color switch
+            {
+                "0070C0" => Labels("ctr", 700, rotate: true, bold: false, color: "FFFFFF"),
+                "92D050" => Labels("ctr", 900, rotate: false, bold: false, color: "404040"),
+                _ => Labels("ctr", 900, rotate: true, bold: false, color: chart.Summary ? "C00000" : "FF0000"),
+            };
+        }
+
         return new XElement(C + "ser",
             Val("idx", index), Val("order", index),
             SeriesName(s),
@@ -206,8 +244,8 @@ internal static class ChartInjector
                 new XElement(A + "ln", new XAttribute("w", 28575), new XAttribute("cap", "rnd"),
                     new XElement(A + "solidFill", Rgb(s.Color)), new XElement(A + "round"))),
             new XElement(C + "marker", Val("symbol", "none")),
-            Labels(s.LabelsBelow ? "b" : "t", 600, rotate: true, bold: false, color: s.Color));
-        if (s.TrendColor is not null)
+            Labels(s.LabelsBelow ? "b" : "t", 900, rotate: true, bold: false, color: s.Color));
+        if (s.TrendColor is not null && !chart.Summary)
         {
             ser.Add(new XElement(C + "trendline",
                 new XElement(C + "spPr",
@@ -222,6 +260,32 @@ internal static class ChartInjector
         return ser;
     }
 
+    /// <summary>
+    /// Вертикальная пунктирная линия на дате окончания экспертизы: одна точка на вспомогательной шкале 0..1
+    /// и линия проекции от нее до оси дат (как линия, нарисованная вручную в книге отчета).
+    /// </summary>
+    private static XElement MarkerChart(ChartPlacement chart)
+    {
+        var points = new XElement(C + "numLit", new XElement(C + "formatCode", "General"), Val("ptCount", chart.CategoryCount),
+            new XElement(C + "pt", new XAttribute("idx", chart.MarkerIndex!.Value), new XElement(C + "v", 1)));
+        return new XElement(C + "lineChart",
+            Val("grouping", "standard"),
+            Val("varyColors", 0),
+            new XElement(C + "ser",
+                Val("idx", MarkerSeriesIndex), Val("order", MarkerSeriesIndex),
+                new XElement(C + "tx", new XElement(C + "v", "Окончание экспертизы")),
+                new XElement(C + "spPr", new XElement(A + "ln", new XElement(A + "noFill"))),
+                new XElement(C + "marker", Val("symbol", "none")),
+                Categories(chart),
+                new XElement(C + "val", points),
+                Val("smooth", 0)),
+            new XElement(C + "dropLines", new XElement(C + "spPr",
+                new XElement(A + "ln", new XAttribute("w", 15875),
+                    new XElement(A + "solidFill", Rgb("0070C0")), new XElement(A + "prstDash", new XAttribute("val", "dash"))))),
+            Val("marker", 1),
+            Val("axId", MarkerCategoryAxis), Val("axId", MarkerValueAxis));
+    }
+
     private static XElement SeriesName(ChartSeriesRef s) =>
         new(C + "tx", new XElement(C + "strRef", new XElement(C + "f", s.NameRef),
             new XElement(C + "strCache", Val("ptCount", 1),
@@ -233,8 +297,10 @@ internal static class ChartInjector
     private static XElement Values(ChartSeriesRef s) =>
         new(C + "val", new XElement(C + "numRef", new XElement(C + "f", s.ValuesRef)));
 
-    private static XElement Labels(string position, int size, bool rotate, bool bold, string color) =>
-        new(C + "dLbls",
+    private static XElement Labels(string? position, int size, bool rotate, bool bold, string color)
+    {
+        var labels = new XElement(C + "dLbls");
+        labels.Add(
             new XElement(C + "spPr", new XElement(A + "noFill"), new XElement(A + "ln", new XElement(A + "noFill"))),
             new XElement(C + "txPr",
                 new XElement(A + "bodyPr", rotate ? new XAttribute("rot", -5400000) : null, new XAttribute("vert", "horz")),
@@ -243,54 +309,65 @@ internal static class ChartInjector
                     new XElement(A + "pPr", new XElement(A + "defRPr", new XAttribute("sz", size), new XAttribute("b", bold ? 1 : 0),
                         new XElement(A + "solidFill", Rgb(color)))),
                     new XElement(A + "endParaRPr", new XAttribute("lang", "ru-RU")))),
-            Val("dLblPos", position),
+            position is null ? null : Val("dLblPos", position),
             Val("showLegendKey", 0),
             Val("showVal", 1),
             Val("showCatName", 0),
             Val("showSerName", 0),
             Val("showPercent", 0),
             Val("showBubbleSize", 0));
+        return labels;
+    }
 
-    private static XElement CategoryAxis() =>
+    private static XElement CategoryAxis(int id, int crossAx, bool deleted) =>
         new(C + "catAx",
-            Val("axId", 50010),
+            Val("axId", id),
             new XElement(C + "scaling", Val("orientation", "minMax")),
-            Val("delete", 0),
+            Val("delete", deleted ? 1 : 0),
             Val("axPos", "b"),
             new XElement(C + "numFmt", new XAttribute("formatCode", "General"), new XAttribute("sourceLinked", 1)),
-            Val("majorTickMark", "out"),
+            Val("majorTickMark", deleted ? "none" : "out"),
             Val("minorTickMark", "none"),
-            Val("tickLblPos", "low"),
+            Val("tickLblPos", deleted ? "none" : "low"),
             new XElement(C + "spPr", new XElement(A + "ln", new XAttribute("w", 9525), new XElement(A + "solidFill", Rgb("BFBFBF")))),
             new XElement(C + "txPr",
                 new XElement(A + "bodyPr", new XAttribute("rot", -5400000), new XAttribute("vert", "horz")),
                 new XElement(A + "lstStyle"),
-                new XElement(A + "p", new XElement(A + "pPr", new XElement(A + "defRPr", new XAttribute("sz", 700))),
+                new XElement(A + "p", new XElement(A + "pPr", new XElement(A + "defRPr", new XAttribute("sz", 900))),
                     new XElement(A + "endParaRPr", new XAttribute("lang", "ru-RU")))),
-            Val("crossAx", 50020),
+            Val("crossAx", crossAx),
             Val("crosses", "autoZero"),
             Val("auto", 1),
             Val("lblAlgn", "ctr"),
             Val("lblOffset", 100),
             Val("noMultiLvlLbl", 0));
 
-    private static XElement ValueAxis() =>
-        new(C + "valAx",
-            Val("axId", 50020),
-            new XElement(C + "scaling", Val("orientation", "minMax")),
-            Val("delete", 0),
-            Val("axPos", "l"),
-            new XElement(C + "majorGridlines",
-                new XElement(C + "spPr", new XElement(A + "ln", new XAttribute("w", 6350), new XElement(A + "solidFill", Rgb("D9D9D9"))))),
-            new XElement(C + "numFmt", new XAttribute("formatCode", "General"), new XAttribute("sourceLinked", 1)),
+    private static XElement ValueAxis(int id, int crossAx, double? min, double? max, string format, bool deleted)
+    {
+        var scaling = new XElement(C + "scaling", Val("orientation", "minMax"));
+        if (max is > 0)
+            scaling.Add(Val("max", max.Value));
+        if (min is not null)
+            scaling.Add(Val("min", min.Value));
+        return new XElement(C + "valAx",
+            Val("axId", id),
+            scaling,
+            Val("delete", deleted ? 1 : 0),
+            Val("axPos", deleted ? "r" : "l"),
+            deleted
+                ? null
+                : new XElement(C + "majorGridlines",
+                    new XElement(C + "spPr", new XElement(A + "ln", new XAttribute("w", 6350), new XElement(A + "solidFill", Rgb("D9D9D9"))))),
+            new XElement(C + "numFmt", new XAttribute("formatCode", format), new XAttribute("sourceLinked", 0)),
             Val("majorTickMark", "none"),
             Val("minorTickMark", "none"),
-            Val("tickLblPos", "nextTo"),
+            Val("tickLblPos", deleted ? "none" : "nextTo"),
             new XElement(C + "spPr", new XElement(A + "ln", new XElement(A + "noFill"))),
-            TextProps(800),
-            Val("crossAx", 50010),
-            Val("crosses", "autoZero"),
+            TextProps(900),
+            Val("crossAx", crossAx),
+            Val("crosses", deleted ? "max" : "autoZero"),
             Val("crossBetween", "between"));
+    }
 
     private static XElement Title(string text) =>
         new(C + "title",

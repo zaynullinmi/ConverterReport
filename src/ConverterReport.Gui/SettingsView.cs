@@ -52,6 +52,8 @@ internal sealed class SettingsView
         RemarksTitle = ch.RemarksTitle;
         LoadsTitle = ch.LoadsTitle;
         SummaryName = ch.SummaryName;
+        LoadsAxisMaxSummary = ch.LoadsAxisMaxSummary;
+        LoadsAxisMaxProject = ch.LoadsAxisMaxProject;
 
         Layout = c.ScreenLayout;
         CheckOnStartup = c.Updates.CheckOnStartup;
@@ -162,6 +164,14 @@ internal sealed class SettingsView
     [Category(Charts), DisplayName("Заголовок: загрузка документов")]
     public string LoadsTitle { get; set; }
 
+    [Category(Charts), DisplayName("Верх шкалы загрузок: сводная")]
+    [Description("Верх шкалы диаграммы загрузок документов на сводной странице (0 — автоматически). Колонки выше обрезаются, значение пишется сбоку.")]
+    public int LoadsAxisMaxSummary { get; set; }
+
+    [Category(Charts), DisplayName("Верх шкалы загрузок: этапы")]
+    [Description("Для страниц этапов (0 — автоматически). Для отдельного этапа можно задать свой на вкладке «Этапы».")]
+    public int LoadsAxisMaxProject { get; set; }
+
     [Category(Charts), DisplayName("Имя сводной диаграммы")]
     [Description("{projects} — список этапов, например «2-4,9».")]
     public string SummaryName { get; set; }
@@ -215,6 +225,8 @@ internal sealed class SettingsView
         ch.RemarksTitle = RemarksTitle;
         ch.LoadsTitle = LoadsTitle;
         ch.SummaryName = SummaryName;
+        ch.LoadsAxisMaxSummary = Math.Max(0, LoadsAxisMaxSummary);
+        ch.LoadsAxisMaxProject = Math.Max(0, LoadsAxisMaxProject);
 
         c.ScreenLayout = Layout;
         c.Updates.CheckOnStartup = CheckOnStartup;

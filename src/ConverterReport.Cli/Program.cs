@@ -68,6 +68,7 @@ internal static class Program
         Info($"Настройки: {Path.GetFullPath(configPath)}");
 
         var result = new ReportGenerator(Info, Warn).Run(config, options.ToRunOptions());
+        SaveFilledDeadlines(config, configPath, result);
 
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Green;
@@ -149,4 +150,20 @@ internal static class Program
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern uint GetConsoleProcessList(uint[] processList, uint processCount);
+
+    /// <summary>Сроки, взятые из старой книги, сохраняются в настройки — в следующий раз книга для этого не нужна.</summary>
+    private static void SaveFilledDeadlines(ReportConfig config, string configPath, RunResult result)
+    {
+        if (result.FilledDeadlines.Count == 0)
+            return;
+        try
+        {
+            ConfigLoader.Save(config, configPath);
+            Info($"Сроки этапов {string.Join(", ", result.FilledDeadlines.Keys)} сохранены в настройки.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Warn($"Не удалось сохранить сроки в {configPath}: {ex.Message}");
+        }
+    }
 }

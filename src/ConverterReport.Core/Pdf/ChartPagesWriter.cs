@@ -24,7 +24,7 @@ internal sealed class ChartPagesWriter
         var items = new List<ProjectReport>();
         if (_m.Summary is not null && _m.Config.Charts.SummaryChart)
             items.Add(_m.Summary);
-        items.AddRange(_m.Projects);
+        items.AddRange(_m.ShownProjects);
 
         var added = 0;
         foreach (var item in items)
@@ -110,10 +110,12 @@ internal sealed class ChartPagesWriter
         spec.Bars.Add(new BarSeries("Устраняется", Palette.ChartFixing, daily.Select(d => (double?)d.Remarks?.Fixing).ToArray()));
         spec.Bars.Add(new BarSeries("Рассматривается", Palette.ChartReview, daily.Select(d => (double?)d.Remarks?.Review).ToArray()));
         spec.Bars.Add(new BarSeries("Устранено за сутки", Palette.ChartFixedPerDay, daily.Select(d => (double?)d.FixedPerDay).ToArray()));
+        // У сводной диаграммы линий тренда нет (как в книге отчета).
+        var trend = cs.TrendLine && !ReferenceEquals(p, _m.Summary);
         spec.Lines.Add(new LineSeries("Всего", Palette.ChartTotal, daily.Select(d => (double?)d.Remarks?.Total).ToArray(),
-            Trend: cs.TrendLine, TrendColor: XColor.FromArgb(0x44, 0x72, 0xC4)));
+            Trend: trend, TrendColor: XColor.FromArgb(0x5B, 0x9B, 0xD5)));
         spec.Lines.Add(new LineSeries("Устранено", Palette.ChartFixed, daily.Select(d => (double?)d.Remarks?.Fixed).ToArray(),
-            Trend: cs.TrendLine, Labels: LabelPosition.Below, TrendColor: XColor.FromArgb(0xED, 0x7D, 0x31)));
+            Trend: trend, Labels: LabelPosition.Below, TrendColor: XColor.FromArgb(0xED, 0x7D, 0x31)));
         return spec;
     }
 
@@ -121,6 +123,7 @@ internal sealed class ChartPagesWriter
     {
         var cs = _m.Config.Charts;
         var reportDate = _m.ReportTime.Date;
+        var max = ReferenceEquals(p, _m.Summary) ? cs.LoadsAxisMaxSummary : p.Project.LoadsAxisMax ?? cs.LoadsAxisMaxProject;
         var spec = new ChartSpec
         {
             Title = "",
@@ -128,6 +131,7 @@ internal sealed class ChartPagesWriter
             ReportIndex = ReportIndex(p.Daily),
             Labels = cs.DataLabels,
             DateFormat = "dd.MM.yyyy ddd",
+            AxisMax = max > 0 ? max : null,
         };
         spec.Bars.Add(new BarSeries("Загружено документов", Palette.ChartLoaded,
             p.Daily.Select(d => d.Date <= reportDate ? (double?)d.Loaded : null).ToArray()));

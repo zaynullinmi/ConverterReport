@@ -82,26 +82,34 @@ public sealed class ReportModel
 
     public List<string> Notes { get; init; } = new();
 
-    /// <summary>«2-4, 9».</summary>
+    /// <summary>Этапы, которые выводятся в отчете (у остальных — только сводная диаграмма).</summary>
+    public List<ProjectReport> ShownProjects => Projects.Where(p => p.Project.ShowInReport).ToList();
+
+    /// <summary>Все загруженные этапы, «2-4, 9» — для имен файлов и сводной диаграммы.</summary>
     public string ProjectsList => Formats.CompressNumbers(Projects.Select(p => p.Number));
 
-    /// <summary>«по 2-4, 9 этапам строительства ВСМ-1».</summary>
-    public string Caption
+    /// <summary>Этапы отчета, «3-4, 9».</summary>
+    public string ShownProjectsList => Formats.CompressNumbers(ShownProjects.Select(p => p.Number));
+
+    /// <summary>«по 3-4, 9 этапам строительства ВСМ-1».</summary>
+    public string Caption => CaptionFor(ShownProjectsList);
+
+    /// <summary>Подпись детального отчета — список без пробела: «по 3-4,9 этапам строительства ВСМ-1».</summary>
+    public string DetailedCaption => CaptionFor(ShownProjectsList.Replace(", ", ","));
+
+    private string CaptionFor(string list)
     {
-        get
-        {
-            var template = Projects.Count == 1 ? Config.Report.ProjectsCaptionSingle : Config.Report.ProjectsCaption;
-            return Formats.ApplyTemplate(template, values: new Dictionary<string, string> { ["projects"] = ProjectsList });
-        }
+        var template = ShownProjects.Count == 1 ? Config.Report.ProjectsCaptionSingle : Config.Report.ProjectsCaption;
+        return Formats.ApplyTemplate(template, values: new Dictionary<string, string> { ["projects"] = list });
     }
 
     public RemarksSnapshot TotalCurrent =>
-        Projects.Where(p => p.Current is not null).Aggregate(RemarksSnapshot.Empty(ReportTime), (acc, p) => acc + p.Current!);
+        ShownProjects.Where(p => p.Current is not null).Aggregate(RemarksSnapshot.Empty(ReportTime), (acc, p) => acc + p.Current!);
 
     public RemarksSnapshot TotalDelta =>
-        Projects.Where(p => p.Delta is not null).Aggregate(RemarksSnapshot.Empty(ReportTime), (acc, p) => acc + p.Delta!);
+        ShownProjects.Where(p => p.Delta is not null).Aggregate(RemarksSnapshot.Empty(ReportTime), (acc, p) => acc + p.Delta!);
 
-    public LoadCounts TotalPeriodLoads => Projects.Aggregate(LoadCounts.Zero, (acc, p) => acc + p.PeriodLoadsSum);
+    public LoadCounts TotalPeriodLoads => ShownProjects.Aggregate(LoadCounts.Zero, (acc, p) => acc + p.PeriodLoadsSum);
 
     public IEnumerable<string> AllWarnings =>
         Projects.SelectMany(p => p.Warnings.Select(w => $"Этап {p.Number}: {w}"));

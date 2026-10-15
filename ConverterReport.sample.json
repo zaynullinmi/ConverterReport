@@ -13,13 +13,15 @@
     "PeriodStartDayOffset": -1,
     "OutputFolder": "Отчеты",
     "Version": "1.0",
-    "FileName": "{date:yyyy.MM.dd} {time:H.mm} Суточный {projectsShort} этапы {version}",
-    "DetailedFileName": "{date:yyyy.MM.dd} {time:H.mm} Суточный {projectsShort} этапы {version} (дет)",
-    "ChartsFileName": "{date:yyyy.MM.dd} {time:H.mm} Суточный {projectsShort} этапы {version} Диаграммы",
+    "FileName": "{date:yyyy.MM.dd} {time:H.mm} Свод ГГЭ {projectsShort} этапы {version}",
+    "DetailedFileName": "{date:yyyy.MM.dd} {time:H.mm} Свод ГГЭ {projectsShort} этапы {version} Отчет",
+    "ChartsFileName": "{date:yyyy.MM.dd} {time:H.mm} Свод ГГЭ {projectsShort} этапы {version} Диаграммы",
     "WorkbookFileName": "{date:yyyy.MM.dd} {time:H.mm} Сводный отчет ГГЭ {projectsShort} этапы ВСМ-1 {version}",
     "WorkbookMode": "Separate",
     "MasterWorkbook": "Сводный отчет ГГЭ ВСМ-1",
     "VisibleDailySheets": 2,
+    "ImportLegacyDays": false,
+    "LegacyWorkbook": null,
     "PdfEngine": "Auto",
     "NotesFile": "Справочно.txt",
     "IncludeDaily": true,
@@ -46,6 +48,8 @@
     "ExtendToExpertiseEnd": true,
     "TrendLine": true,
     "DataLabels": "Auto",
+    "LoadsAxisMaxSummary": 500,
+    "LoadsAxisMaxProject": 250,
     "FontFamily": "Arial"
   },
   "ScreenLayout": {
@@ -88,6 +92,8 @@
       "Name": null,
       "ScreenFile": "\\\\server\\share\\2 этап\\Экран ГГЭ 2 этап.xlsx",
       "Enabled": true,
+      "ShowInReport": true,
+      "LoadsAxisMax": null,
       "ChartStartDate": null,
       "ExpertiseEndDate": null,
       "Deadlines": {
@@ -114,6 +120,8 @@
       "Name": null,
       "ScreenFile": "\\\\server\\share\\3 этап\\Экран ГГЭ 3 этап.xlsx",
       "Enabled": true,
+      "ShowInReport": true,
+      "LoadsAxisMax": null,
       "ChartStartDate": null,
       "ExpertiseEndDate": null,
       "Deadlines": {
@@ -140,6 +148,8 @@
       "Name": null,
       "ScreenFile": "\\\\server\\share\\4 этап\\Экран ГГЭ 4 этап.xlsx",
       "Enabled": true,
+      "ShowInReport": true,
+      "LoadsAxisMax": null,
       "ChartStartDate": null,
       "ExpertiseEndDate": null,
       "Deadlines": {
@@ -166,6 +176,8 @@
       "Name": null,
       "ScreenFile": "\\\\server\\share\\9 этап\\Экран ГГЭ 9 этап.xlsx",
       "Enabled": true,
+      "ShowInReport": true,
+      "LoadsAxisMax": null,
       "ChartStartDate": null,
       "ExpertiseEndDate": null,
       "Deadlines": {

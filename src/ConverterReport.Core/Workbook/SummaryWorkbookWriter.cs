@@ -19,7 +19,7 @@ public static class SummaryWorkbookWriter
     /// прежняя версия остается рядом как «.bak».
     /// </summary>
     /// <exception cref="MasterWorkbookException">Книга занята другой программой, повреждена или создана не этой программой.</exception>
-    public static SummaryWorkbook Append(ReportModel model, string masterPath, int visibleDailySheets)
+    public static SummaryWorkbook Append(ReportModel model, string masterPath, int visibleDailySheets, LegacySource? legacy = null)
     {
         var exists = File.Exists(masterPath);
         if (exists)
@@ -32,7 +32,8 @@ public static class SummaryWorkbookWriter
         {
             SummaryWorkbook result;
             using (var wb = exists ? Load(masterPath) : SummaryWorkbookBuilder.NewWorkbook())
-                result = new SummaryWorkbookBuilder(model).AppendTo(wb, masterPath, temp, visibleDailySheets);
+                result = new SummaryWorkbookBuilder(model).AppendTo(wb, masterPath, temp, visibleDailySheets,
+                    legacy is null ? null : (book, built) => ImportLegacy(book, built, legacy, model.ReportTime.Date));
             ChartInjector.Inject(temp, SummaryWorkbook.ChartsSheet, result.Charts);
 
             try
@@ -59,6 +60,24 @@ public static class SummaryWorkbookWriter
             {
                 // Временный файл не критичен.
             }
+        }
+    }
+
+    /// <summary>Листы прошлых дней из старой книги, которых в общей книге еще нет.</summary>
+    private static void ImportLegacy(XLWorkbook master, SummaryWorkbook built, LegacySource legacy, DateTime reportDate)
+    {
+        try
+        {
+            var existing = master.Worksheets.Select(w => w.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var missing = LegacyWorkbook.DailySheetNames(legacy.Path)
+                .Where(n => !existing.Contains(n) && SummaryWorkbookBuilder.DailyDate(n, reportDate) < reportDate)
+                .ToList();
+            if (missing.Count > 0)
+                built.ImportedSheets = LegacyWorkbook.CopySheets(legacy.Book, master, missing);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            built.LegacyWarning = $"Не удалось перенести листы из старой книги {legacy.Path}: {ex.Message}";
         }
     }
 

@@ -25,7 +25,17 @@ public static class ConfigLoader
         var config = JsonSerializer.Deserialize<ReportConfig>(json, Options)
                      ?? throw new InvalidDataException($"Файл конфигурации пуст: {fullPath}");
         config.BaseDirectory = Path.GetDirectoryName(fullPath) ?? Directory.GetCurrentDirectory();
+        Upgrade(config);
         return config;
+    }
+
+    /// <summary>Имена файлов по умолчанию прежних версий заменяются на текущие (свои имена не трогаются).</summary>
+    internal static void Upgrade(ReportConfig config)
+    {
+        var r = config.Report;
+        r.FileName = ReportSettings.ObsoleteFileNames.GetValueOrDefault(r.FileName, r.FileName);
+        r.DetailedFileName = ReportSettings.ObsoleteFileNames.GetValueOrDefault(r.DetailedFileName, r.DetailedFileName);
+        r.ChartsFileName = ReportSettings.ObsoleteFileNames.GetValueOrDefault(r.ChartsFileName, r.ChartsFileName);
     }
 
     public static void Save(ReportConfig config, string path)
@@ -72,6 +82,10 @@ public static class ConfigLoader
 
         if (config.Report.WorkbookMode == WorkbookMode.Append && string.IsNullOrWhiteSpace(config.Report.MasterWorkbook))
             errors.Add("Не указан файл общей книги (\"MasterWorkbook\").");
+        if (config.Report.ImportLegacyDays && string.IsNullOrWhiteSpace(config.Report.LegacyWorkbook))
+            errors.Add("Не указана старая книга для переноса листов прошлых дней (\"LegacyWorkbook\").");
+        foreach (var p in enabled.Where(p => p.LoadsAxisMax is < 0))
+            errors.Add($"Этап {p.Number}: верх шкалы загрузок не может быть отрицательным.");
         if (config.Report.VisibleDailySheets < 0)
             errors.Add("Число видимых листов дней (\"VisibleDailySheets\") не может быть отрицательным.");
 

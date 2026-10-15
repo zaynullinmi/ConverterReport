@@ -61,6 +61,20 @@ internal static class Headless
             log.Open(config.ResolvePath(options.OutputFolder ?? config.Report.OutputFolder));
             log.Write("INFO", $"Запуск без окна, настройки: {path}");
             var result = new ReportGenerator(m => log.Write("INFO", m), m => log.Write("WARN", m)).Run(config, options.ToRunOptions());
+            if (result.FilledDeadlines.Count > 0)
+            {
+                // Сроки из старой книги — в настройки, чтобы в следующий раз книга для этого не понадобилась.
+                try
+                {
+                    ConfigLoader.Save(config, path);
+                    log.Write("INFO", $"Сроки этапов {string.Join(", ", result.FilledDeadlines.Keys)} сохранены в настройки.");
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    log.Write("WARN", $"Не удалось сохранить сроки в {path}: {ex.Message}");
+                }
+            }
+
             log.Write("INFO", $"Готово: {string.Join("; ", result.Files)}");
             return 0;
         }

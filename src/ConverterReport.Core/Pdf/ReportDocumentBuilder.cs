@@ -38,7 +38,7 @@ internal sealed class ReportDocumentBuilder
 
         if (daily)
             AddDailyReport();
-        if (detailed && _m.Projects.Any(p => p.Current is not null))
+        if (detailed && _m.ShownProjects.Any(p => p.Current is not null))
             AddDetailedReport();
         return _doc;
     }
@@ -125,8 +125,8 @@ internal sealed class ReportDocumentBuilder
             "1. Загрузка документов в АИС ГГЭ.",
             "SectionHeading");
 
-        var projects = _m.Projects.Where(p => p.PeriodLoads.Count > 0 || !_s.HideProjectsWithoutLoads).ToList();
-        if (_m.Projects.All(p => p.PeriodLoads.Count == 0))
+        var projects = _m.ShownProjects.Where(p => p.PeriodLoads.Count > 0 || !_s.HideProjectsWithoutLoads).ToList();
+        if (_m.ShownProjects.All(p => p.PeriodLoads.Count == 0))
         {
             section.AddParagraph("За отчетный период загрузок документов не было.");
             return;
@@ -197,7 +197,7 @@ internal sealed class ReportDocumentBuilder
     {
         section.AddParagraph("2. Устранение замечаний.", "SectionHeading");
         var table = StatusTable(section, critical1: "%¹", critical2: "%²");
-        foreach (var p in _m.Projects)
+        foreach (var p in _m.ShownProjects)
         {
             if (p.Current is null)
             {
@@ -224,7 +224,7 @@ internal sealed class ReportDocumentBuilder
 
         // Как в книге: таблица изменений без шапки — колонки те же, что в разделе 2.
         var table = StatusTable(section, critical1: "%¹", critical2: "%²", header: false);
-        foreach (var p in _m.Projects)
+        foreach (var p in _m.ShownProjects)
         {
             if (p.Delta is null || p.Current is null)
             {
@@ -342,13 +342,13 @@ internal sealed class ReportDocumentBuilder
 
     private void AddStaleFootnotes(Section section)
     {
-        foreach (var p in _m.Projects.Where(p => p.IsStale(_m.ReportTime)))
+        foreach (var p in _m.ShownProjects.Where(p => p.IsStale(_m.ReportTime)))
             Footnote(section, $"* Этап {p.Number}: данные экрана на {Formats.DateTimeText(p.Current!.Timestamp)} (на отчетное время строка не заполнена).");
     }
 
     private void AddDeadlinesSection(Section section)
     {
-        var withDeadlines = _m.Projects.Where(p => p.Project.Deadlines.Count > 0).ToList();
+        var withDeadlines = _m.ShownProjects.Where(p => p.Project.Deadlines.Count > 0).ToList();
         if (withDeadlines.Count == 0)
             return;
 
@@ -475,8 +475,8 @@ internal sealed class ReportDocumentBuilder
         // Держим таблицу на одной странице.
         h1.KeepWith = 2;
 
-        var withData = _m.Projects.Where(p => p.Current is not null).ToList();
-        foreach (var p in _m.Projects)
+        var withData = _m.ShownProjects.Where(p => p.Current is not null).ToList();
+        foreach (var p in _m.ShownProjects)
         {
             if (p.Current is null)
             {

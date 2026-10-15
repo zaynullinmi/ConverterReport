@@ -81,7 +81,20 @@ internal sealed record ChartPlacement(
     int FromColumn,
     int ToColumn,
     string CategoriesRef,
-    IReadOnlyList<ChartSeriesRef> Series);
+    IReadOnlyList<ChartSeriesRef> Series)
+{
+    /// <summary>Сводная диаграмма (по всем этапам).</summary>
+    public bool Summary { get; init; }
+
+    /// <summary>Количество точек (дней) по оси категорий.</summary>
+    public int CategoryCount { get; init; }
+
+    /// <summary>Верх шкалы (null — автоматически).</summary>
+    public double? AxisMax { get; init; }
+
+    /// <summary>Номер точки с датой окончания экспертизы — вертикальная пунктирная линия.</summary>
+    public int? MarkerIndex { get; init; }
+}
 
 /// <summary>Результат построения сводной книги.</summary>
 public sealed class SummaryWorkbook
@@ -96,6 +109,12 @@ public sealed class SummaryWorkbook
     public required string DailySheet { get; init; }
 
     public int ChartPages { get; init; }
+
+    /// <summary>Сколько листов прошлых дней перенесено из старой книги.</summary>
+    public int ImportedSheets { get; set; }
+
+    /// <summary>Не удалось прочитать старую книгу (лист дня в общую книгу при этом записан).</summary>
+    public string? LegacyWarning { get; set; }
 
     internal List<ChartPlacement> Charts { get; } = new();
 }
