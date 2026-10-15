@@ -75,6 +75,18 @@ public sealed class ReportSettings
     public string WorkbookFileName { get; set; } = "{date:yyyy.MM.dd} {time:H.mm} Сводный отчет ГГЭ {projectsShort} этапы ВСМ-1 {version}";
 
     /// <summary>
+    /// Separate — новая сводная книга на каждый отчет (WorkbookFileName);
+    /// Append — лист дня дописывается в общую книгу MasterWorkbook, прежние листы дней сохраняются.
+    /// </summary>
+    public WorkbookMode WorkbookMode { get; set; } = WorkbookMode.Separate;
+
+    /// <summary>Общая книга для режима Append: путь относительно папки отчетов (или полный), подстановки — как в именах файлов.</summary>
+    public string MasterWorkbook { get; set; } = "Сводный отчет ГГЭ ВСМ-1";
+
+    /// <summary>Сколько последних листов дней оставлять видимыми в общей книге; остальные скрываются (0 — показывать все).</summary>
+    public int VisibleDailySheets { get; set; } = 2;
+
+    /// <summary>
     /// Чем сохранять PDF: Auto — через Excel, если он установлен (вид как при ручном сохранении), иначе встроенным генератором;
     /// Excel — только через Excel; Builtin — только встроенным генератором (Excel не нужен).
     /// </summary>
@@ -110,6 +122,13 @@ public enum PdfEngine
     Auto,
     Excel,
     Builtin,
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum WorkbookMode
+{
+    Separate,
+    Append,
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]

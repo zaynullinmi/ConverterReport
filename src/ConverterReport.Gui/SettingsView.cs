@@ -36,6 +36,7 @@ internal sealed class SettingsView
         ChartsFileName = r.ChartsFileName;
         WorkbookFileName = r.WorkbookFileName;
         NotesFile = r.NotesFile ?? "";
+        VisibleDailySheets = r.VisibleDailySheets;
         IncludeDeadlines = r.IncludeDeadlines;
         HideProjectsWithoutLoads = r.HideProjectsWithoutLoads;
         DeadlineStages = string.Join("; ", r.DeadlineStages);
@@ -107,6 +108,10 @@ internal sealed class SettingsView
 
     [Category(Files), DisplayName("Имя сводной книги Excel")]
     public string WorkbookFileName { get; set; }
+
+    [Category(Files), DisplayName("Общая книга: видимых листов дней")]
+    [Description("Режим «Дописывать лист дня в общую книгу»: сколько последних листов дней оставлять видимыми, остальные скрываются (0 — показывать все).")]
+    public int VisibleDailySheets { get; set; }
 
     [Category(Files), DisplayName("Файл с текстом «Справочно»")]
     [Description("Текст редактируется на вкладке «Отчет» и сохраняется в этот файл.")]
@@ -194,6 +199,7 @@ internal sealed class SettingsView
         r.ChartsFileName = ChartsFileName;
         r.WorkbookFileName = WorkbookFileName;
         r.NotesFile = string.IsNullOrWhiteSpace(NotesFile) ? null : NotesFile.Trim();
+        r.VisibleDailySheets = Math.Max(0, VisibleDailySheets);
         r.IncludeDeadlines = IncludeDeadlines;
         r.HideProjectsWithoutLoads = HideProjectsWithoutLoads;
         r.DeadlineStages = SplitList(DeadlineStages);

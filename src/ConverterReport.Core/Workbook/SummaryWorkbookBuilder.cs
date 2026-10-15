@@ -32,13 +32,51 @@ internal sealed class SummaryWorkbookBuilder
         _dailySheet = model.ReportTime.ToString("dd.MM", Formats.Ru);
     }
 
+    /// <summary>Отметка в свойствах книги «создана программой»: только в такую книгу программа дописывает листы дней.</summary>
+    internal const string MarkerName = "Generator";
+    internal const string MarkerValue = "ConverterReport";
+
+    /// <summary>Новая книга.</summary>
     public SummaryWorkbook Build(string path)
     {
-        using var wb = new XLWorkbook();
+        using var wb = NewWorkbook();
+        var result = Populate(wb, path, master: false);
+        wb.SaveAs(path);
+        return result;
+    }
+
+    /// <summary>
+    /// Общая книга: листы программы (Описание, Д.N/З.N, Свод, Диаграммы, Отчет_дет, Отчет) пересоздаются,
+    /// лист дня добавляется или заменяется, прежние листы дней остаются (старые скрываются).
+    /// </summary>
+    public SummaryWorkbook AppendTo(XLWorkbook wb, string path, string savePath, int visibleDailySheets)
+    {
+        foreach (var name in OwnedSheets())
+        {
+            if (wb.TryGetWorksheet(name, out var old))
+                old.Delete();
+        }
+
+        var result = Populate(wb, path, master: true);
+        Arrange(wb, visibleDailySheets);
+        wb.SaveAs(savePath);
+        return result;
+    }
+
+    internal static XLWorkbook NewWorkbook()
+    {
+        var wb = new XLWorkbook();
         wb.Style.Font.FontName = "Calibri";
         wb.Style.Font.FontSize = 11;
+        return wb;
+    }
 
-        Description(wb.AddWorksheet("Описание"));
+    internal static bool IsOwnWorkbook(XLWorkbook wb) =>
+        wb.CustomProperties.Any(p => p.Name == MarkerName && Equals(p.Value?.ToString(), MarkerValue));
+
+    private SummaryWorkbook Populate(XLWorkbook wb, string path, bool master)
+    {
+        Description(wb.AddWorksheet("Описание"), master);
         foreach (var p in _projects)
         {
             Documents(wb.AddWorksheet("Д." + SheetSuffix(p)), p);
@@ -58,13 +96,104 @@ internal sealed class SummaryWorkbookBuilder
         var result = new SummaryWorkbook { Path = path, DailySheet = _dailySheet, ChartPages = ChartsSheet(charts, svod, out var placements) };
         result.Charts.AddRange(placements);
 
+        // Открывается лист отчета; выделен только он (иначе Excel откроет книгу с группой листов).
+        foreach (var ws in wb.Worksheets)
+        {
+            ws.TabSelected = false;
+            ws.TabActive = false;
+        }
+
         daily.SetTabActive();
-        daily.Select();
+        daily.TabSelected = true;
         wb.CalculateMode = XLCalculateMode.Auto;
         wb.FullCalculationOnLoad = true;
         wb.ForceFullCalculation = true;
-        wb.SaveAs(path);
+        if (!IsOwnWorkbook(wb))
+            wb.CustomProperties.Add(MarkerName, MarkerValue);
         return result;
+    }
+
+    /// <summary>Листы, которые программа строит заново при каждом формировании.</summary>
+    private IEnumerable<string> OwnedSheets()
+    {
+        yield return "Описание";
+        foreach (var p in _projects)
+        {
+            yield return "Д." + SheetSuffix(p);
+            yield return "З." + SheetSuffix(p);
+        }
+
+        yield return SvodLayout.SheetName;
+        yield return SummaryWorkbook.ChartsSheet;
+        yield return _dailySheet;
+        yield return SummaryWorkbook.DetailedSheet;
+        yield return SummaryWorkbook.DataSheet;
+    }
+
+    /// <summary>
+    /// Порядок листов общей книги: Описание, Д.N/З.N, Свод, Диаграммы, листы дней по датам, прочие листы, Отчет_дет, Отчет.
+    /// Видимыми остаются последние <paramref name="visibleDailySheets"/> листов дней и лист текущего отчета.
+    /// </summary>
+    private void Arrange(XLWorkbook wb, int visibleDailySheets)
+    {
+        var sheets = wb.Worksheets.ToList();
+        IXLWorksheet? Find(string name) => sheets.FirstOrDefault(w => w.Name == name);
+        var daily = sheets.Where(w => IsDailySheet(w.Name))
+            .OrderBy(DailyDate).ThenBy(w => w.Name, StringComparer.Ordinal)
+            .ToList();
+
+        var order = new List<IXLWorksheet>();
+        void Take(IXLWorksheet? ws)
+        {
+            if (ws is not null && !order.Contains(ws))
+                order.Add(ws);
+        }
+
+        Take(Find("Описание"));
+        foreach (var name in _projects.SelectMany(p => new[] { "Д." + SheetSuffix(p), "З." + SheetSuffix(p) }))
+            Take(Find(name));
+        foreach (var ws in sheets.Where(w => w.Name.StartsWith("Д.", StringComparison.Ordinal) || w.Name.StartsWith("З.", StringComparison.Ordinal)))
+            Take(ws); // этапы, которых нет в этом отчете: на них ссылаются прежние листы дней
+        Take(Find(SvodLayout.SheetName));
+        Take(Find(SummaryWorkbook.ChartsSheet));
+        daily.ForEach(Take);
+        foreach (var ws in sheets.Where(w => w.Name is not (SummaryWorkbook.DetailedSheet or SummaryWorkbook.DataSheet)))
+            Take(ws);
+        Take(Find(SummaryWorkbook.DetailedSheet));
+        Take(Find(SummaryWorkbook.DataSheet));
+        for (var i = 0; i < order.Count; i++)
+            order[i].Position = i + 1;
+
+        var keep = visibleDailySheets <= 0 ? daily.Count : visibleDailySheets;
+        var visible = daily.Skip(Math.Max(0, daily.Count - keep)).ToHashSet();
+        foreach (var ws in daily)
+        {
+            ws.Visibility = visible.Contains(ws) || ws.Name == _dailySheet
+                ? XLWorksheetVisibility.Visible
+                : XLWorksheetVisibility.Hidden;
+        }
+    }
+
+    internal static bool IsDailySheet(string name) =>
+        name.Length == 5 && char.IsDigit(name[0]) && char.IsDigit(name[1]) && name[2] == '.' && char.IsDigit(name[3]) && char.IsDigit(name[4]);
+
+    /// <summary>Дата листа дня: из ячейки AE4 (отчетная дата), иначе по имени «ДД.ММ».</summary>
+    private DateTime DailyDate(IXLWorksheet ws)
+    {
+        var cell = ws.Cell(4, 31);
+        if (cell.DataType == XLDataType.DateTime)
+            return cell.GetDateTime().Date;
+        if (cell.DataType == XLDataType.Number && cell.GetDouble() is > 30000 and < 80000 and var serial)
+            return DateTime.FromOADate(serial).Date;
+        try
+        {
+            var date = new DateTime(_m.ReportTime.Year, int.Parse(ws.Name[3..]), int.Parse(ws.Name[..2]));
+            return date > _m.ReportTime.Date.AddMonths(6) ? date.AddYears(-1) : date;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return DateTime.MinValue;
+        }
     }
 
     private static string SheetSuffix(ProjectReport p) => Formats.SafeFileName(p.Number).Replace("[", "(").Replace("]", ")");
@@ -79,9 +208,9 @@ internal sealed class SummaryWorkbookBuilder
 
     // ================================================================== Описание
 
-    private void Description(IXLWorksheet ws)
+    private void Description(IXLWorksheet ws, bool master)
     {
-        string[] lines =
+        var lines = new List<string>
         {
             "Сводная книга сформирована программой ConverterReport автоматически — вручную заполнять ничего не нужно.",
             $"Отчетная дата и время: {Formats.DateTimeText(_m.ReportTime)}; отчетный период с {Formats.DateTimeText(_m.PeriodStart)}.",
@@ -93,9 +222,16 @@ internal sealed class SummaryWorkbookBuilder
             "Диаграммы — диаграммы по листу «Свод».",
             "Ячейки «Всего» подсвечиваются красным, если не совпадает сумма по статусам.",
         };
+        if (master)
+        {
+            lines.Add("Общая книга: при каждом формировании отчета лист дня добавляется (отчет за ту же дату заменяет лист), прежние листы дней " +
+                      "сохраняются. Описание, Д.N/З.N, Свод, Диаграммы, Отчет_дет и Отчет обновляются на последний сформированный отчет.");
+            lines.Add("Прежние листы дней ссылаются на листы Д.N/З.N. Старые листы дней скрыты — показать: правой кнопкой по ярлыку листа → «Показать».");
+        }
+
         ws.Cell(1, 2).Value = "Сводная книга отчета ГГЭ";
         ws.Cell(1, 2).Style.Font.Bold = true;
-        for (var i = 0; i < lines.Length; i++)
+        for (var i = 0; i < lines.Count; i++)
         {
             ws.Cell(i + 2, 1).Value = $"{i + 1}.";
             ws.Cell(i + 2, 2).Value = lines[i];
@@ -103,7 +239,7 @@ internal sealed class SummaryWorkbookBuilder
 
         ws.Column(1).Width = 4;
         ws.Column(2).Width = 150;
-        ws.Range(2, 2, lines.Length + 1, 2).Style.Alignment.WrapText = true;
+        ws.Range(2, 2, lines.Count + 1, 2).Style.Alignment.WrapText = true;
     }
 
     // ================================================================== Д.N и З.N

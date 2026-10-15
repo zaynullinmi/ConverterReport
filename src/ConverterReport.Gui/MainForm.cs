@@ -44,6 +44,10 @@ internal sealed class MainForm : Form
     private RadioButton _engineAuto = null!;
     private RadioButton _engineExcel = null!;
     private RadioButton _engineBuiltin = null!;
+    private RadioButton _bookSeparate = null!;
+    private RadioButton _bookAppend = null!;
+    private TextBox _masterPath = null!;
+    private Button _masterBrowse = null!;
     private TextBox _notes = null!;
     private Button _run = null!;
     private ProgressBar _progress = null!;
@@ -92,6 +96,15 @@ internal sealed class MainForm : Form
                 await CheckUpdatesAsync(silent: true);
         };
         FormClosing += OnFormClosing;
+        Load += (_, _) =>
+        {
+            var area = Screen.FromControl(this).WorkingArea;
+            if (Height > area.Height || Width > area.Width)
+            {
+                Size = new Size(Math.Min(Width, area.Width), Math.Min(Height, area.Height));
+                Location = new Point(area.Left + (area.Width - Width) / 2, area.Top + (area.Height - Height) / 2);
+            }
+        };
     }
 
     // ================================================================== Построение окна
@@ -166,7 +179,7 @@ internal sealed class MainForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         // --- Параметры: дата/время, папка | что формировать, чем сохранять PDF.
-        var parameters = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, AutoSize = true };
+        var parameters = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 3, AutoSize = true };
         parameters.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55));
         parameters.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 45));
 
@@ -214,10 +227,33 @@ internal sealed class MainForm : Form
             r.CheckedChanged += (_, _) => MarkDirty();
         var engineBox = Group("Как сохранять PDF", Stack(_engineAuto, _engineExcel, _engineBuiltin));
 
+        // Сводная книга: новая на каждый отчет или лист дня в общей книге.
+        _bookSeparate = new RadioButton { Text = "Новая книга на каждый отчет", AutoSize = true, Margin = new Padding(3, 6, 12, 3) };
+        _bookAppend = new RadioButton { Text = "Дописывать лист дня в общую книгу:", AutoSize = true, Margin = new Padding(3, 6, 3, 3) };
+        _masterPath = new TextBox { Width = 330 };
+        _masterBrowse = new Button { Text = "Обзор…", AutoSize = true };
+        _masterBrowse.Click += (_, _) => BrowseMasterWorkbook();
+        _masterPath.TextChanged += (_, _) => MarkDirty();
+        foreach (var r in new[] { _bookSeparate, _bookAppend })
+        {
+            r.CheckedChanged += (_, _) =>
+            {
+                _masterPath.Enabled = _masterBrowse.Enabled = _bookAppend.Checked;
+                MarkDirty();
+            };
+        }
+
+        var bookHint = Hint("Общая книга: если файла нет — он будет создан; прежние листы дней сохраняются, видны последние (сколько — на вкладке «Настройки»). " +
+                            "Относительный путь — от папки отчетов.");
+        bookHint.MaximumSize = new Size(980, 0);
+        var bookBox = Group("Сводная книга Excel", Stack(Row(_bookSeparate, _bookAppend, _masterPath, _masterBrowse), bookHint));
+
         parameters.Controls.Add(dateBox, 0, 0);
         parameters.Controls.Add(folderBox, 0, 1);
         parameters.Controls.Add(whatBox, 1, 0);
         parameters.Controls.Add(engineBox, 1, 1);
+        parameters.Controls.Add(bookBox, 0, 2);
+        parameters.SetColumnSpan(bookBox, 2);
 
         // --- Справочно.
         _notes = new TextBox { Multiline = true, ScrollBars = ScrollBars.Vertical, AcceptsReturn = true, Dock = DockStyle.Fill, WordWrap = true };
@@ -469,6 +505,10 @@ internal sealed class MainForm : Form
             _engineAuto.Checked = r.PdfEngine == PdfEngine.Auto;
             _engineExcel.Checked = r.PdfEngine == PdfEngine.Excel;
             _engineBuiltin.Checked = r.PdfEngine == PdfEngine.Builtin;
+            _bookAppend.Checked = r.WorkbookMode == WorkbookMode.Append;
+            _bookSeparate.Checked = !_bookAppend.Checked;
+            _masterPath.Text = r.MasterWorkbook;
+            _masterPath.Enabled = _masterBrowse.Enabled = _bookAppend.Checked;
             _notes.Text = _notesLoaded = ReadNotesText();
 
             _projects.Rows.Clear();
@@ -502,6 +542,8 @@ internal sealed class MainForm : Form
         r.IncludeDetailed = _detailed.Checked;
         r.IncludeCharts = _charts.Checked;
         r.PdfEngine = _engineExcel.Checked ? PdfEngine.Excel : _engineBuiltin.Checked ? PdfEngine.Builtin : PdfEngine.Auto;
+        r.WorkbookMode = _bookAppend.Checked ? WorkbookMode.Append : WorkbookMode.Separate;
+        r.MasterWorkbook = string.IsNullOrWhiteSpace(_masterPath.Text) ? new ReportSettings().MasterWorkbook : _masterPath.Text.Trim();
 
         _config.Projects = _projects.Rows.Cast<DataGridViewRow>().Select(row =>
         {
@@ -841,6 +883,36 @@ internal sealed class MainForm : Form
 
         if (dialog.ShowDialog(this) == DialogResult.OK)
             _outFolder.Text = dialog.SelectedPath;
+    }
+
+    private void BrowseMasterWorkbook()
+    {
+        string folder;
+        try
+        {
+            folder = OutputFolder();
+        }
+        catch
+        {
+            folder = Path.GetDirectoryName(_configPath)!;
+        }
+
+        using var dialog = new SaveFileDialog
+        {
+            Title = "Общая книга: выберите существующую книгу программы или укажите имя новой",
+            Filter = "Книга Excel (*.xlsx)|*.xlsx",
+            OverwritePrompt = false,
+            InitialDirectory = folder,
+            FileName = Path.GetFileName(_masterPath.Text.Trim()),
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        // Книга в папке отчетов записывается коротко — только имя файла.
+        var chosen = Path.GetFullPath(dialog.FileName);
+        _masterPath.Text = string.Equals(Path.GetDirectoryName(chosen), Path.GetFullPath(folder), StringComparison.OrdinalIgnoreCase)
+            ? Path.GetFileName(chosen)
+            : chosen;
     }
 
     // ================================================================== Этапы

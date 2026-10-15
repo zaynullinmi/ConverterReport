@@ -107,11 +107,33 @@ public sealed class ReportGenerator
         string FileFor(string template, string extension) =>
             Writable(folder, Formats.SafeFileName(Formats.ApplyTemplate(template, reportTime, names)) + extension);
 
-        // 1. Сводная книга Excel.
-        var workbookPath = FileFor(config.Report.WorkbookFileName, ".xlsx");
-        var workbook = SummaryWorkbookWriter.Write(model, workbookPath);
+        // 1. Сводная книга Excel: отдельная на отчет или лист дня в общей книге.
+        SummaryWorkbook? workbook = null;
+        if (config.Report.WorkbookMode == WorkbookMode.Append)
+        {
+            var master = MasterPath(config.Report.MasterWorkbook, folder, reportTime, names);
+            try
+            {
+                workbook = SummaryWorkbookWriter.Append(model, master, config.Report.VisibleDailySheets);
+                _info($"Лист «{workbook.DailySheet}» записан в общую книгу: {master}");
+            }
+            catch (MasterWorkbookException ex)
+            {
+                var message = ex.Message + " Сформирована отдельная книга.";
+                result.Warnings.Add(message);
+                _warn(message);
+            }
+        }
+
+        if (workbook is null)
+        {
+            var path = FileFor(config.Report.WorkbookFileName, ".xlsx");
+            workbook = SummaryWorkbookWriter.Write(model, path);
+            _info($"Сводная книга сохранена: {path}");
+        }
+
+        var workbookPath = workbook.Path;
         result.Workbook = workbookPath;
-        _info($"Сводная книга сохранена: {workbookPath}");
 
         // 2. Три PDF.
         var jobs = new List<(string Kind, SheetPdf Job)>();
@@ -216,6 +238,18 @@ public sealed class ReportGenerator
         }
 
         return inputs.ToList();
+    }
+
+    /// <summary>Файл общей книги: относительно папки отчетов (или полный путь), с подстановками, расширение .xlsx.</summary>
+    internal static string MasterPath(string template, string folder, DateTime reportTime, IReadOnlyDictionary<string, string> names)
+    {
+        var path = Formats.ApplyTemplate(template.Trim(), reportTime, names);
+        var name = Formats.SafeFileName(Path.GetFileName(path));
+        if (!name.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
+            name += ".xlsx";
+        var dir = Path.GetDirectoryName(path);
+        var full = string.IsNullOrEmpty(dir) ? name : Path.Combine(dir, name);
+        return Path.GetFullPath(Path.IsPathRooted(full) ? full : Path.Combine(folder, full));
     }
 
     /// <summary>Путь для сохранения; если файл занят (открыт в Excel или просмотрщике PDF) — имя с номером.</summary>

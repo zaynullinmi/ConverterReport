@@ -70,6 +70,11 @@ public static class ConfigLoader
                 errors.Add($"Не удалось разобрать время \"{t}\" (ожидается ЧЧ:ММ).");
         }
 
+        if (config.Report.WorkbookMode == WorkbookMode.Append && string.IsNullOrWhiteSpace(config.Report.MasterWorkbook))
+            errors.Add("Не указан файл общей книги (\"MasterWorkbook\").");
+        if (config.Report.VisibleDailySheets < 0)
+            errors.Add("Число видимых листов дней (\"VisibleDailySheets\") не может быть отрицательным.");
+
         if (config.Charts.StartDate is { Length: > 0 } chartStart && Formats.ParseDate(chartStart) is null)
             errors.Add($"Не удалось разобрать дату начала диаграмм \"{chartStart}\".");
 
