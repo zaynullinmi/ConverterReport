@@ -18,13 +18,13 @@ internal static class Program
         }
         catch (ConfigurationException ex)
         {
-            if (!args.Any(a => a.Equals("--auto", StringComparison.OrdinalIgnoreCase)))
+            if (!args.Any(a => a.Equals("--auto", StringComparison.OrdinalIgnoreCase) || a.Equals("--no-pause", StringComparison.OrdinalIgnoreCase)))
                 MessageBox.Show(ex.Message, "ConverterReport", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 2;
         }
 
-        // Без окна — для Планировщика заданий Windows.
-        if (options.Auto && !options.ShowHelp)
+        // Без окна — для Планировщика заданий Windows. --no-pause — задания, созданные для прежней консольной версии.
+        if ((options.Auto || options.NoPause) && !options.ShowHelp)
             return Headless.Run(options);
 
         Application.SetHighDpiMode(HighDpiMode.SystemAware);
@@ -52,7 +52,9 @@ internal static class Headless
         var log = new RunLog();
         try
         {
-            var path = options.ConfigPath ?? AppPaths.DefaultConfigPath;
+            // Как в прежней консольной версии: сначала текущая папка («Рабочая папка» задания), затем папка программы.
+            var path = options.ConfigPath
+                       ?? (File.Exists(ConfigLoader.DefaultFileName) ? Path.GetFullPath(ConfigLoader.DefaultFileName) : AppPaths.DefaultConfigPath);
             if (!File.Exists(path))
                 throw new ConfigurationException(new[] { $"Не найден файл настроек {path}. Запустите программу без параметров и заполните настройки." });
             var config = ConfigLoader.Load(path);
