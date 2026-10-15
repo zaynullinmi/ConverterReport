@@ -1,0 +1,23 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+.vscode/
+*.swp
+TestResults/
+publish/
+
+## Локальные настройки и результаты работы (содержат пути и данные — не коммитить)
+/ConverterReport.json
+src/ConverterReport/ConverterReport.json
+Отчеты/
+*.pdf
+*.log
+Справочно.txt
+
+## Рабочие файлы Excel (экраны/отчеты с реальными данными)
+*.xlsx
+*.xlsm
+~$*

@@ -1,0 +1,30 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Test
+        run: dotnet test --configuration Release
+
+      - name: Publish win-x64
+        run: dotnet publish src/ConverterReport -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ConverterReport-win-x64
+          path: |
+            publish/ConverterReport.exe
+            publish/ConverterReport.sample.json
+            publish/Справочно.sample.txt
