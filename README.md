@@ -57,7 +57,7 @@
    dotnet publish src/ConverterReport -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o publish
    ```
    Получится `publish\ConverterReport.exe`, которому не нужен установленный .NET.
-   Готовую сборку можно скачать во вкладке **Actions** репозитория (артефакт `ConverterReport-win-x64`).
+   Готовую сборку можно скачать в разделе **Releases** репозитория (архив `ConverterReport-win-x64.zip`, собирается автоматически при каждом обновлении `main`) или во вкладке **Actions** (артефакт `ConverterReport-win-x64`).
 2. Создать файл настроек рядом с программой: `ConverterReport.exe --init` (или скопировать `ConverterReport.sample.json`
    в `ConverterReport.json`), указать пути к файлам экранов и сроки этапов.
 3. Запустить `ConverterReport.exe`. Книга и PDF появятся в папке `Отчеты`.

@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -28,3 +30,14 @@ jobs:
             publish/ConverterReport.exe
             publish/ConverterReport.sample.json
             publish/Справочно.sample.txt
+
+      # Сборка из main публикуется как релиз — exe можно скачать без входа в GitHub.
+      - name: Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v2.0.${{ github.run_number }}"
+          Compress-Archive -Path publish/ConverterReport.exe, publish/ConverterReport.sample.json, "publish/Справочно.sample.txt" -DestinationPath ConverterReport-win-x64.zip
+          gh release create $tag ConverterReport-win-x64.zip --target $env:GITHUB_SHA --title "ConverterReport $tag" --notes "Сборка из main ($env:GITHUB_SHA). Распакуйте архив, переименуйте ConverterReport.sample.json в ConverterReport.json, укажите пути к экранам и запустите ConverterReport.exe."
