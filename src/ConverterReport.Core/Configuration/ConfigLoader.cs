@@ -29,13 +29,24 @@ public static class ConfigLoader
         return config;
     }
 
-    /// <summary>Имена файлов по умолчанию прежних версий заменяются на текущие (свои имена не трогаются).</summary>
+    /// <summary>
+    /// Настройки прежних версий: имена файлов по умолчанию заменяются на текущие (свои имена не трогаются),
+    /// старая книга переносится в список прошлых версий отчета.
+    /// </summary>
     internal static void Upgrade(ReportConfig config)
     {
         var r = config.Report;
         r.FileName = ReportSettings.ObsoleteFileNames.GetValueOrDefault(r.FileName, r.FileName);
         r.DetailedFileName = ReportSettings.ObsoleteFileNames.GetValueOrDefault(r.DetailedFileName, r.DetailedFileName);
         r.ChartsFileName = ReportSettings.ObsoleteFileNames.GetValueOrDefault(r.ChartsFileName, r.ChartsFileName);
+        if (!string.IsNullOrWhiteSpace(r.LegacyWorkbook))
+        {
+            var legacy = r.LegacyWorkbook.Trim();
+            if (!r.ArchiveWorkbooks.Any(a => string.Equals(a.Path.Trim(), legacy, StringComparison.OrdinalIgnoreCase)))
+                r.ArchiveWorkbooks.Insert(0, new ArchiveSource { Path = legacy });
+        }
+
+        r.LegacyWorkbook = null;
     }
 
     public static void Save(ReportConfig config, string path)
@@ -63,8 +74,6 @@ public static class ConfigLoader
         {
             if (string.IsNullOrWhiteSpace(p.Number))
                 errors.Add("У проекта не заполнен номер (\"Number\").");
-            if (string.IsNullOrWhiteSpace(p.ScreenFile))
-                errors.Add($"Этап {p.Number}: не указан файл экрана (\"ScreenFile\").");
             if (p.ExpertiseEndDate is { Length: > 0 } end && Formats.ParseDate(end) is null)
                 errors.Add($"Этап {p.Number}: не удалось разобрать дату окончания экспертизы \"{end}\".");
             if (p.ChartStartDate is { Length: > 0 } start && Formats.ParseDate(start) is null)
@@ -82,8 +91,10 @@ public static class ConfigLoader
 
         if (config.Report.WorkbookMode == WorkbookMode.Append && string.IsNullOrWhiteSpace(config.Report.MasterWorkbook))
             errors.Add("Не указан файл общей книги (\"MasterWorkbook\").");
-        if (config.Report.ImportLegacyDays && string.IsNullOrWhiteSpace(config.Report.LegacyWorkbook))
-            errors.Add("Не указана старая книга для переноса листов прошлых дней (\"LegacyWorkbook\").");
+        if (enabled.Count > 0 && enabled.All(p => p.IsArchive))
+            errors.Add("Ни у одного включенного этапа не указан файл экрана (\"ScreenFile\").");
+        if (config.Report.ImportLegacyDays && config.Report.ArchiveWorkbooks.All(a => string.IsNullOrWhiteSpace(a.Path)))
+            errors.Add("Не указаны прошлые версии отчета для архива (\"ArchiveWorkbooks\").");
         foreach (var p in enabled.Where(p => p.LoadsAxisMax is < 0))
             errors.Add($"Этап {p.Number}: верх шкалы загрузок не может быть отрицательным.");
         if (config.Report.VisibleDailySheets < 0)

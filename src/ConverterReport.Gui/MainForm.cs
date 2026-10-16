@@ -51,8 +51,11 @@ internal sealed class MainForm : Form
     private TextBox _masterPath = null!;
     private Button _masterBrowse = null!;
     private CheckBox _legacy = null!;
-    private TextBox _legacyPath = null!;
-    private Button _legacyBrowse = null!;
+    private ListView _archives = null!;
+    private Button _archiveAdd = null!;
+    private Button _archiveStages = null!;
+    private Button _archiveRemove = null!;
+    private List<ArchiveSource> _archiveSources = new();
     private TextBox _notes = null!;
     private Button _run = null!;
     private ProgressBar _progress = null!;
@@ -239,11 +242,26 @@ internal sealed class MainForm : Form
         _masterBrowse = new Button { Text = "Обзор…", AutoSize = true };
         _masterBrowse.Click += (_, _) => BrowseMasterWorkbook();
         _masterPath.TextChanged += (_, _) => MarkDirty();
-        _legacy = new CheckBox { Text = "Переносить листы прошлых дней из старой книги:", AutoSize = true, Margin = new Padding(23, 6, 3, 3) };
-        _legacyPath = new TextBox { Width = 330 };
-        _legacyBrowse = new Button { Text = "Обзор…", AutoSize = true };
-        _legacyBrowse.Click += (_, _) => BrowseLegacyWorkbook();
-        _legacyPath.TextChanged += (_, _) => MarkDirty();
+        // Прошлые версии отчета: данные выбранных этапов (для «Свода» и диаграмм за прошлые периоды) и листы прошлых дней.
+        _legacy = new CheckBox { Text = "Подгружать данные из прошлых версий отчета (архив):", AutoSize = true, Margin = new Padding(3, 6, 3, 3) };
+        _archives = new ListView
+        {
+            View = View.Details,
+            FullRowSelect = true,
+            HideSelection = false,
+            MultiSelect = false,
+            HeaderStyle = ColumnHeaderStyle.Nonclickable,
+            Size = new Size(760, 84),
+        };
+        _archives.Columns.Add("Файл", 330);
+        _archives.Columns.Add("Что брать", 410);
+        _archives.DoubleClick += async (_, _) => await ChooseArchiveStages();
+        _archiveAdd = new Button { Text = "Добавить…", AutoSize = true };
+        _archiveAdd.Click += async (_, _) => await AddArchive();
+        _archiveStages = new Button { Text = "Этапы…", AutoSize = true };
+        _archiveStages.Click += async (_, _) => await ChooseArchiveStages();
+        _archiveRemove = new Button { Text = "Удалить", AutoSize = true };
+        _archiveRemove.Click += (_, _) => RemoveArchive();
         _legacy.CheckedChanged += (_, _) =>
         {
             UpdateBookControls();
@@ -259,12 +277,18 @@ internal sealed class MainForm : Form
         }
 
         var bookHint = Hint("Общая книга: если файла нет — он будет создан; прежние листы дней сохраняются, видны последние (сколько — на вкладке «Настройки»). " +
-                            "Относительный путь — от папки отчетов. Старая книга (версии 1.2.2) только читается: недостающие листы прошлых дней переносятся " +
-                            "в общую книгу при каждом формировании, а незаполненные сроки этапов берутся из ее последнего листа.");
+                            "Относительный путь — от папки отчетов. Прошлые версии отчета только читаются: при добавлении книги выберите, данные каких этапов брать " +
+                            "(только за даты, которых нет в экранах); недостающие листы прошлых дней переносятся в общую книгу, незаполненные сроки этапов " +
+                            "берутся из последнего листа дня.");
         bookHint.MaximumSize = new Size(980, 0);
+        var archiveButtons = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Margin = new Padding(0) };
+        archiveButtons.Controls.AddRange(new Control[] { _archiveAdd, _archiveStages, _archiveRemove });
+        var archiveRow = Row(_archives, archiveButtons);
+        archiveRow.Margin = new Padding(20, 0, 3, 3);
         var bookBox = Group("Сводная книга Excel", Stack(
             Row(_bookSeparate, _bookAppend, _masterPath, _masterBrowse),
-            Row(_legacy, _legacyPath, _legacyBrowse),
+            Row(_legacy),
+            archiveRow,
             bookHint));
 
         parameters.Controls.Add(dateBox, 0, 0);
@@ -533,7 +557,8 @@ internal sealed class MainForm : Form
             _bookSeparate.Checked = !_bookAppend.Checked;
             _masterPath.Text = r.MasterWorkbook;
             _legacy.Checked = r.ImportLegacyDays;
-            _legacyPath.Text = r.LegacyWorkbook ?? "";
+            _archiveSources = r.ArchiveWorkbooks.Select(CloneArchive).ToList();
+            RefreshArchives();
             UpdateBookControls();
             _notes.Text = _notesLoaded = ReadNotesText();
 
@@ -571,7 +596,8 @@ internal sealed class MainForm : Form
         r.WorkbookMode = _bookAppend.Checked ? WorkbookMode.Append : WorkbookMode.Separate;
         r.MasterWorkbook = string.IsNullOrWhiteSpace(_masterPath.Text) ? new ReportSettings().MasterWorkbook : _masterPath.Text.Trim();
         r.ImportLegacyDays = _legacy.Checked;
-        r.LegacyWorkbook = string.IsNullOrWhiteSpace(_legacyPath.Text) ? null : _legacyPath.Text.Trim();
+        r.ArchiveWorkbooks = _archiveSources.Select(CloneArchive).ToList();
+        r.LegacyWorkbook = null;
 
         _config.Projects = _projects.Rows.Cast<DataGridViewRow>().Select(row =>
         {
@@ -845,7 +871,10 @@ internal sealed class MainForm : Form
 
         _last = result;
         SetResultButtons();
+        ApplyAddedStages(result!);
         ApplyFilledDeadlines(result!);
+        if (result!.ConfigChanged)
+            SaveConfig(showStatus: false);
         var warnings = result!.Warnings.Count;
         AppendLog(warnings > 0 ? $"Готово. Предупреждений: {warnings}." : "Готово.", Color.ForestGreen);
         _runState.Text = $"Готово: {DateTime.Now:HH:mm}" + (warnings > 0 ? $", предупреждений: {warnings}" : "");
@@ -867,9 +896,35 @@ internal sealed class MainForm : Form
         var shown = _deadlinesProject;
         _deadlinesProject = null;
         ShowDeadlines(shown ?? SelectedProject());
-        AppendLog($"Сроки этапов {string.Join(", ", result.FilledDeadlines.Keys)} взяты из старой книги и сохранены в настройки.", Color.DimGray);
-        SaveConfig(showStatus: false);
+        AppendLog($"Сроки этапов {string.Join(", ", result.FilledDeadlines.Keys)} взяты из прошлой версии отчета и сохранены в настройки.", Color.DimGray);
     }
+
+    /// <summary>Архивные этапы, добавленные при формировании (выбраны в прошлых версиях отчета), — в таблицу этапов.</summary>
+    private void ApplyAddedStages(RunResult result)
+    {
+        var numbers = _projects.Rows.Cast<DataGridViewRow>().Select(r => Cell(r, ColNumber)).ToHashSet();
+        var added = result.AddedStages.Where(p => !numbers.Contains(p.Number)).ToList();
+        foreach (var project in added)
+            InsertProjectRow(project);
+        if (added.Count > 0)
+            AppendLog($"Этапы {string.Join(", ", added.Select(p => p.Number))} добавлены в список этапов как архивные.", Color.DimGray);
+    }
+
+    /// <summary>Этап в таблицу — по порядку номеров.</summary>
+    private void InsertProjectRow(ProjectConfig project)
+    {
+        AddProjectRow(project);
+        var row = _projects.Rows[^1];
+        var index = _projects.Rows.Cast<DataGridViewRow>().TakeWhile(r => r != row && CompareStage(Cell(r, ColNumber), project.Number) <= 0).Count();
+        if (index < _projects.Rows.Count - 1)
+        {
+            _projects.Rows.Remove(row);
+            _projects.Rows.Insert(index, row);
+        }
+    }
+
+    private static int CompareStage(string a, string b) =>
+        int.TryParse(a.Trim(), out var x) && int.TryParse(b.Trim(), out var y) ? x.CompareTo(y) : string.Compare(a, b, StringComparison.OrdinalIgnoreCase);
 
     private void SetRunning(bool running)
     {
@@ -941,36 +996,96 @@ internal sealed class MainForm : Form
     private void UpdateBookControls()
     {
         _masterPath.Enabled = _masterBrowse.Enabled = _bookAppend.Checked;
-        _legacy.Enabled = _bookAppend.Checked;
-        _legacyPath.Enabled = _legacyBrowse.Enabled = _bookAppend.Checked && _legacy.Checked;
+        _archives.Enabled = _archiveAdd.Enabled = _archiveStages.Enabled = _archiveRemove.Enabled = _legacy.Checked;
     }
 
-    private void BrowseLegacyWorkbook()
+    private static ArchiveSource CloneArchive(ArchiveSource a) =>
+        new() { Path = a.Path, Stages = new Dictionary<string, string>(a.Stages, StringComparer.OrdinalIgnoreCase) };
+
+    private void RefreshArchives()
+    {
+        var selected = _archives.SelectedIndices.Count > 0 ? _archives.SelectedIndices[0] : -1;
+        _archives.Items.Clear();
+        foreach (var source in _archiveSources)
+            _archives.Items.Add(new ListViewItem(new[] { source.Path, ArchiveStagesDialog.Describe(source) }) { ToolTipText = source.Path });
+        if (selected >= 0 && selected < _archives.Items.Count)
+            _archives.Items[selected].Selected = true;
+    }
+
+    /// <summary>Добавить прошлую версию отчета: книга читается, и сразу спрашивается, данные каких этапов брать.</summary>
+    private async Task AddArchive()
     {
         using var dialog = new OpenFileDialog
         {
-            Title = "Старая книга отчета (версии 1.2.2)",
+            Title = "Прошлая версия отчета (сводная книга или книга этапа)",
             Filter = "Книги Excel (*.xlsx;*.xlsm)|*.xlsx;*.xlsm|Все файлы|*.*",
         };
-        try
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+        if (_archiveSources.Any(a => string.Equals(_config.ResolvePath(a.Path), dialog.FileName, StringComparison.OrdinalIgnoreCase)))
         {
-            if (_legacyPath.Text.Trim().Length > 0)
-            {
-                var full = _config.ResolvePath(_legacyPath.Text);
-                dialog.InitialDirectory = Path.GetDirectoryName(full);
-                dialog.FileName = Path.GetFileName(full);
-            }
-        }
-        catch
-        {
-            // Некорректный путь — диалог откроется по умолчанию.
+            MessageBox.Show(this, "Эта книга уже в списке. Чтобы изменить выбор этапов, нажмите «Этапы…».", "Прошлые версии отчета",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
         }
 
-        if (dialog.ShowDialog(this) == DialogResult.OK)
+        var source = new ArchiveSource { Path = dialog.FileName };
+        if (await ChooseStages(source))
         {
-            _legacyPath.Text = dialog.FileName;
+            _archiveSources.Add(source);
             _legacy.Checked = true;
+            RefreshArchives();
+            _archives.Items[^1].Selected = true;
+            MarkDirty();
         }
+    }
+
+    private async Task ChooseArchiveStages()
+    {
+        if (_archives.SelectedIndices.Count == 0)
+            return;
+        var source = _archiveSources[_archives.SelectedIndices[0]];
+        if (await ChooseStages(source))
+        {
+            RefreshArchives();
+            MarkDirty();
+        }
+    }
+
+    /// <summary>Диалог выбора этапов; выбранные этапы, которых нет в списке, добавляются архивными.</summary>
+    private async Task<bool> ChooseStages(ArchiveSource source)
+    {
+        _settings.ApplyTo(_config);
+        var known = _projects.Rows.Cast<DataGridViewRow>().Select(r => Cell(r, ColNumber)).ToHashSet();
+        UseWaitCursor = true;
+        (Core.Archive.ArchiveBook Book, Dictionary<string, string> Stages)? chosen;
+        try
+        {
+            chosen = await ArchiveStagesDialog.Choose(this, _config.ResolvePath(source.Path), source, _config.ScreenLayout, known);
+        }
+        finally
+        {
+            UseWaitCursor = false;
+        }
+
+        if (chosen is null)
+            return false;
+        source.Stages = chosen.Value.Stages;
+        var added = source.Stages.Values.Where(v => v != "-" && !known.Contains(v)).Distinct().ToList();
+        foreach (var number in added)
+            InsertProjectRow(new ProjectConfig { Number = number, ScreenFile = "", Enabled = true, ShowInReport = false });
+        if (added.Count > 0)
+            AppendLog($"Этапы {string.Join(", ", added)} добавлены в список этапов как архивные (без файла экрана).", Color.DimGray);
+        return true;
+    }
+
+    private void RemoveArchive()
+    {
+        if (_archives.SelectedIndices.Count == 0)
+            return;
+        _archiveSources.RemoveAt(_archives.SelectedIndices[0]);
+        RefreshArchives();
+        MarkDirty();
     }
 
     private void BrowseMasterWorkbook()
@@ -1014,6 +1129,7 @@ internal sealed class MainForm : Form
         var index = _projects.Rows.Add(p.Enabled, p.ShowInReport, p.Number, p.Name ?? "", p.ScreenFile, null, p.ExpertiseEndDate ?? "", p.ChartStartDate ?? "",
             p.LoadsAxisMax?.ToString() ?? "");
         _projects.Rows[index].Tag = copy;
+        _projects.Rows[index].Cells[ColFile].ToolTipText = "Пусто — архивный этап: данные только из прошлых версий отчета и общей книги.";
     }
 
     /// <summary>Выбранная строка; пока таблица не показана на экране, CurrentRow пустой — тогда первая выделенная.</summary>
@@ -1110,8 +1226,15 @@ internal sealed class MainForm : Form
                 continue;
             }
 
-            total++;
             var file = Cell(row, ColFile);
+            if (file.Length == 0)
+            {
+                // Архивный этап: данные только из прошлых версий отчета и общей книги.
+                row.Cells[ColFile].Style.BackColor = Color.Empty;
+                continue;
+            }
+
+            total++;
             bool exists;
             try
             {

@@ -170,7 +170,7 @@ internal static class ChartInjector
             plot.Add(line);
         }
 
-        var marker = chart.MarkerIndex is { } m && m >= 0 && m < chart.CategoryCount;
+        var marker = chart.MarkerRef is not null;
         if (marker)
             plot.Add(MarkerChart(chart));
 
@@ -180,9 +180,10 @@ internal static class ChartInjector
             plot.Add(CategoryAxis(MarkerCategoryAxis, MarkerValueAxis, deleted: true), ValueAxis(MarkerValueAxis, MarkerCategoryAxis, min: 0, max: 1, format: "General", deleted: true));
 
         var chartElement = new XElement(C + "chart");
-        if (!string.IsNullOrEmpty(chart.Title))
-            chartElement.Add(Title(chart.Title));
-        chartElement.Add(Val("autoTitleDeleted", string.IsNullOrEmpty(chart.Title) ? 1 : 0), plot);
+        var titled = !string.IsNullOrEmpty(chart.Title) || chart.TitleRef is not null;
+        if (titled)
+            chartElement.Add(Title(chart.Title, chart.TitleRef));
+        chartElement.Add(Val("autoTitleDeleted", titled ? 0 : 1), plot);
         if (remarks)
         {
             chartElement.Add(new XElement(C + "legend", Val("legendPos", "b"), Val("overlay", 0), TextProps(900)));
@@ -269,13 +270,13 @@ internal static class ChartInjector
     }
 
     /// <summary>
-    /// Вертикальная пунктирная линия на дате окончания экспертизы: одна точка на вспомогательной шкале 0..1
-    /// и линия проекции от нее до оси дат (как линия, нарисованная вручную в книге отчета).
+    /// Вертикальная пунктирная линия на дате окончания экспертизы: ряд «Свода» с 1 на эту дату (остальные — #Н/Д)
+    /// на вспомогательной шкале 0..1 и линия проекции от точки до оси дат (как линия, нарисованная вручную в книге отчета).
     /// </summary>
     private static XElement MarkerChart(ChartPlacement chart)
     {
-        var points = new XElement(C + "numLit", new XElement(C + "formatCode", "General"), Val("ptCount", chart.CategoryCount),
-            new XElement(C + "pt", new XAttribute("idx", chart.MarkerIndex!.Value), new XElement(C + "v", 1)));
+        var cache = Enumerable.Range(0, chart.CategoryCount).Select(i => i == chart.MarkerIndex ? 1.0 : (double?)null).ToList();
+        var points = new XElement(C + "numRef", new XElement(C + "f", chart.MarkerRef), NumCache(cache));
         return new XElement(C + "lineChart",
             Val("grouping", "standard"),
             Val("varyColors", 0),
@@ -300,10 +301,21 @@ internal static class ChartInjector
                 new XElement(C + "pt", new XAttribute("idx", 0), new XElement(C + "v", s.Name)))));
 
     private static XElement Categories(ChartPlacement chart) =>
-        new(C + "cat", new XElement(C + "strRef", new XElement(C + "f", chart.CategoriesRef)));
+        new(C + "cat", new XElement(C + "strRef", new XElement(C + "f", chart.CategoriesRef),
+            chart.CategoryCache is { } labels
+                ? new XElement(C + "strCache", Val("ptCount", labels.Count),
+                    labels.Select((l, i) => new XElement(C + "pt", new XAttribute("idx", i), new XElement(C + "v", l))))
+                : null));
 
     private static XElement Values(ChartSeriesRef s) =>
-        new(C + "val", new XElement(C + "numRef", new XElement(C + "f", s.ValuesRef)));
+        new(C + "val", new XElement(C + "numRef", new XElement(C + "f", s.ValuesRef), s.Cache is { } cache ? NumCache(cache) : null));
+
+    /// <summary>Кэш значений: точки без значения (#Н/Д) пропускаются.</summary>
+    private static XElement NumCache(IReadOnlyList<double?> values) =>
+        new(C + "numCache", new XElement(C + "formatCode", "General"), Val("ptCount", values.Count),
+            values.Select((v, i) => v is { } x
+                ? new XElement(C + "pt", new XAttribute("idx", i), new XElement(C + "v", x.ToString(System.Globalization.CultureInfo.InvariantCulture)))
+                : null));
 
     private static XElement Labels(string? position, int size, bool rotate, bool bold, string color)
     {
@@ -377,8 +389,25 @@ internal static class ChartInjector
             Val("crossBetween", "between"));
     }
 
-    private static XElement Title(string text) =>
-        new(C + "title",
+    /// <summary>Заголовок 14 пт, полужирный: текст или ссылка на ячейку (<paramref name="cellRef"/>, текст — ее кэш).</summary>
+    private static XElement Title(string text, string? cellRef)
+    {
+        var format = new XElement(C + "txPr",
+            new XElement(A + "bodyPr"),
+            new XElement(A + "lstStyle"),
+            new XElement(A + "p",
+                new XElement(A + "pPr", new XElement(A + "defRPr", new XAttribute("sz", 1400), new XAttribute("b", 1))),
+                new XElement(A + "endParaRPr", new XAttribute("lang", "ru-RU"))));
+        if (cellRef is not null)
+        {
+            return new XElement(C + "title",
+                new XElement(C + "tx", new XElement(C + "strRef", new XElement(C + "f", cellRef),
+                    new XElement(C + "strCache", Val("ptCount", 1), new XElement(C + "pt", new XAttribute("idx", 0), new XElement(C + "v", text))))),
+                Val("overlay", 0),
+                format);
+        }
+
+        return new XElement(C + "title",
             new XElement(C + "tx",
                 new XElement(C + "rich",
                     new XElement(A + "bodyPr"),
@@ -389,6 +418,7 @@ internal static class ChartInjector
                             new XElement(A + "rPr", new XAttribute("lang", "ru-RU"), new XAttribute("sz", 1400), new XAttribute("b", 1)),
                             new XElement(A + "t", text))))),
             Val("overlay", 0));
+    }
 
     private static XElement TextProps(int size) =>
         new(C + "txPr",

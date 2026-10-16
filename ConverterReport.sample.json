@@ -21,7 +21,7 @@
     "MasterWorkbook": "Сводный отчет ГГЭ ВСМ-1",
     "VisibleDailySheets": 2,
     "ImportLegacyDays": false,
-    "LegacyWorkbook": null,
+    "ArchiveWorkbooks": [],
     "PdfEngine": "Auto",
     "NotesFile": "Справочно.txt",
     "IncludeDaily": true,
@@ -30,6 +30,7 @@
     "IncludeDeadlines": true,
     "LoadsMode": "Sum",
     "ReportLoads": "Auto",
+    "MarkStaleData": true,
     "HideProjectsWithoutLoads": true,
     "DeadlineStages": [
       "Входной контроль",

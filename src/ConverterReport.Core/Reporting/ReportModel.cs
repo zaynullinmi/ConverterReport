@@ -99,8 +99,8 @@ public sealed class ReportModel
     /// <summary>Этапы, которые выводятся в отчете (у остальных — только сводная диаграмма).</summary>
     public List<ProjectReport> ShownProjects => Projects.Where(p => p.Project.ShowInReport).ToList();
 
-    /// <summary>Все загруженные этапы, «2-4, 9» — для имен файлов и сводной диаграммы.</summary>
-    public string ProjectsList => Formats.CompressNumbers(Projects.Select(p => p.Number));
+    /// <summary>Все этапы с экраном, «2-4, 9» — для имен файлов и сводной диаграммы (архивные этапы не входят).</summary>
+    public string ProjectsList => Formats.CompressNumbers(Projects.Where(p => !p.Project.IsArchive).Select(p => p.Number));
 
     /// <summary>Этапы отчета, «3-4, 9».</summary>
     public string ShownProjectsList => Formats.CompressNumbers(ShownProjects.Select(p => p.Number));

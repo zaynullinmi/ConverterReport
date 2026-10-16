@@ -52,14 +52,16 @@ public sealed class MasterWorkbookTests : IDisposable
             Assert.Equal(new[] { "15.10" }, wb.Worksheets.Where(w => w.TabSelected).Select(w => w.Name));
             Assert.True(wb.Worksheet("15.10").TabActive);
 
-            // Прежний лист дня не изменился: его дата и ссылка на строку экрана на 14.10 18:00.
+            // Прежний лист дня не изменился: его дата, и данные — строка экрана на 14.10 18:00 (ищется по дате листа).
             var old = wb.Worksheet("14.10");
             Assert.Equal(new DateTime(2026, 10, 14), old.Cell("AE4").GetDateTime());
             Assert.Equal(0.75, Days(old.Cell("AF4")), 6);
-            var reference = old.CellsUsed().Select(c => c.FormulaA1).First(f => f.Contains("'З.3'!E"));
-            var row = int.Parse(Regex.Match(reference, @"'З\.3'!E(\d+)").Groups[1].Value);
-            Assert.Equal(new DateTime(2026, 10, 14), wb.Worksheet("З.3").Cell(row, 2).GetDateTime());
-            Assert.Equal(0.75, Days(wb.Worksheet("З.3").Cell(row, 4)), 6);
+            var z = wb.Worksheet("З.3");
+            var row = z.RowsUsed().First(r => r.Cell(2).Value.IsDateTime && r.Cell(2).GetDateTime() == new DateTime(2026, 10, 14)
+                                              && Math.Abs(Days(r.Cell(4)) - 0.75) < 1e-6).RowNumber();
+            var converter = old.Column(27).CellsUsed().First(c => c.GetString() == "III.").Address.RowNumber + 3;
+            Assert.Equal(row, (int)old.Cell(converter, 37).Value.GetNumber());
+            Assert.Equal(z.Cell(row, 6).Value.GetNumber(), old.Cell(converter, 30).Value.GetNumber());
         }
 
         // Диаграммы пересозданы один раз: сводная + 2 этапа, по 2 диаграммы.

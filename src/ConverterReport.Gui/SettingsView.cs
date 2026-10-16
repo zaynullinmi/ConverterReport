@@ -39,6 +39,7 @@ internal sealed class SettingsView
         VisibleDailySheets = r.VisibleDailySheets;
         IncludeDeadlines = r.IncludeDeadlines;
         HideProjectsWithoutLoads = r.HideProjectsWithoutLoads;
+        MarkStaleData = r.MarkStaleData;
         ReportLoads = ReportLoadsConverter.ToText(r.ReportLoads);
         DeadlineStages = string.Join("; ", r.DeadlineStages);
         LoadsMode = r.LoadsMode == Core.Configuration.LoadsMode.Each ? LoadsModeConverter.Each : LoadsModeConverter.Sum;
@@ -131,6 +132,11 @@ internal sealed class SettingsView
                  "(с 18:00 прошлого дня). На диаграммах загрузки всегда за день.")]
     public string ReportLoads { get; set; }
 
+    [Category(Daily), DisplayName("Отмечать «*» этапы без строки на отчетное время"), TypeConverter(typeof(YesNoConverter))]
+    [Description("Если в экране нет строки на отчетное время (взята более ранняя): «Да» — у номера этапа «*» и примечание под таблицей " +
+                 "«* Этап N: данные экрана на …»; «Нет» — без отметки и примечания (предупреждение остается в журнале).")]
+    public bool MarkStaleData { get; set; }
+
     [Category(Daily), DisplayName("Скрывать этапы без загрузок"), TypeConverter(typeof(YesNoConverter))]
     [Description("В разделе «1. Загрузка документов» не показывать этапы, по которым загрузок не было.")]
     public bool HideProjectsWithoutLoads { get; set; }
@@ -139,8 +145,9 @@ internal sealed class SettingsView
     [Description("Колонки раздела «4. Сроки», через «;».")]
     public string DeadlineStages { get; set; }
 
-    [Category(Daily), DisplayName("Загрузки во встроенном PDF"), TypeConverter(typeof(LoadsModeConverter))]
-    [Description("Только для встроенного генератора PDF: сумма за период по этапу или каждая загрузка отдельной строкой.")]
+    [Category(Daily), DisplayName("Загрузки в разделе 1: строки"), TypeConverter(typeof(LoadsModeConverter))]
+    [Description("Сумма загрузок по этапу (одна строка: этап | кол-во загрузок | …) или каждая загрузка отдельной строкой " +
+                 "(этап | 1, 2, 3… | начало | окончание | документы).")]
     public string LoadsMode { get; set; }
 
     [Category(Daily), DisplayName("Шрифт")]
@@ -219,6 +226,7 @@ internal sealed class SettingsView
         r.VisibleDailySheets = Math.Max(0, VisibleDailySheets);
         r.IncludeDeadlines = IncludeDeadlines;
         r.HideProjectsWithoutLoads = HideProjectsWithoutLoads;
+        r.MarkStaleData = MarkStaleData;
         r.ReportLoads = ReportLoadsConverter.FromText(ReportLoads);
         r.DeadlineStages = SplitList(DeadlineStages);
         r.LoadsMode = LoadsMode == LoadsModeConverter.Each ? Core.Configuration.LoadsMode.Each : Core.Configuration.LoadsMode.Sum;
@@ -270,8 +278,8 @@ internal abstract class ChoiceConverter : StringConverter
 
 internal sealed class LoadsModeConverter : ChoiceConverter
 {
-    public const string Sum = "Сумма за период";
-    public const string Each = "Каждая загрузка";
+    public const string Sum = "Сумма по этапу";
+    public const string Each = "Каждая загрузка отдельной строкой";
 
     protected override string[] Choices => new[] { Sum, Each };
 }

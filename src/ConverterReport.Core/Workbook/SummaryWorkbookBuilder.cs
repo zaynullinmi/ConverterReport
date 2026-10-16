@@ -30,6 +30,13 @@ internal sealed class SummaryWorkbookBuilder
     private readonly Dictionary<ProjectReport, (int Stamp, int Row, int First, int Last)> _remarksIndex = new();
     private readonly Dictionary<(int Category, ProjectReport Project), int> _dataRows = new();
 
+    /// <summary>Страницы листа «Диаграммы» (нужны «Своду» — ячейки окончания экспертизы).</summary>
+    private readonly List<ChartPage> _pages;
+    private IXLWorksheet? _chartsSheet;
+
+    /// <summary>Верх шкалы загрузок, измененный вручную на листе «Диаграммы» общей книги: страница → значение.</summary>
+    private readonly Dictionary<string, double> _axisOverrides = new(StringComparer.OrdinalIgnoreCase);
+
     public SummaryWorkbookBuilder(ReportModel model)
     {
         _m = model;
@@ -38,6 +45,7 @@ internal sealed class SummaryWorkbookBuilder
         _loaded = model.Projects.Where(p => p.Screen is not null).ToList();
         _projects = _loaded.Where(p => p.Project.ShowInReport).ToList();
         _dailySheet = model.ReportTime.ToString("dd.MM", Formats.Ru);
+        _pages = PlanPages();
     }
 
     /// <summary>Отметка в свойствах книги «создана программой»: только в такую книгу программа дописывает листы дней.</summary>
@@ -59,6 +67,8 @@ internal sealed class SummaryWorkbookBuilder
     /// </summary>
     public SummaryWorkbook AppendTo(XLWorkbook wb, string path, string savePath, int visibleDailySheets, Action<XLWorkbook, SummaryWorkbook>? beforeArrange = null)
     {
+        if (wb.TryGetWorksheet(SummaryWorkbook.ChartsSheet, out var oldCharts))
+            ReadAxisOverrides(oldCharts);
         foreach (var name in OwnedSheets())
         {
             if (wb.TryGetWorksheet(name, out var old))
@@ -211,7 +221,28 @@ internal sealed class SummaryWorkbookBuilder
         }
     }
 
-    private static string SheetSuffix(ProjectReport p) => Formats.SafeFileName(p.Number).Replace("[", "(").Replace("]", ")");
+    private static string SheetSuffix(ProjectReport p) => SheetSuffix(p.Number);
+
+    internal static string SheetSuffix(string number) => Formats.SafeFileName(number).Replace("[", "(").Replace("]", ")");
+
+    /// <summary>Заголовок служебного столбца листа «З.N» (момент последней заполненной строки).</summary>
+    internal const string StampHeader = "Последняя строка: дата и время";
+
+    /// <summary>Последний столбец данных экрана на листе «Д.N» (дальше — служебные W/X).</summary>
+    internal const int DocumentsDataColumns = 22;
+
+    /// <summary>Последний столбец данных экрана на листе «З.N» (дальше — служебные столбцы программы).</summary>
+    internal static int RemarksDataColumns(IXLWorksheet ws, ScreenLayout layout)
+    {
+        var stamp = ws.Row(2).CellsUsed().FirstOrDefault(c => c.GetString() == StampHeader);
+        return stamp is null ? Col(layout.RemarksAll) + 37 : stamp.Address.ColumnNumber - 2;
+    }
+
+    /// <summary>
+    /// Строк в ссылках листов отчета на Д.N/З.N — с запасом: листы пересоздаются при каждом формировании
+    /// (строк становится больше), а прежние листы дней общей книги ссылаются на них.
+    /// </summary>
+    private static int Bound(int last) => Math.Max(3000, last + 1000);
 
     private string D(ProjectReport p) => XlStyle.Q("Д." + SheetSuffix(p));
 
@@ -229,12 +260,14 @@ internal sealed class SummaryWorkbookBuilder
         {
             "Сводная книга сформирована программой ConverterReport автоматически — вручную заполнять ничего не нужно.",
             $"Отчетная дата и время: {Formats.DateTimeText(_m.ReportTime)}; отчетный период с {Formats.DateTimeText(_m.PeriodStart)}.",
-            "Д.N, З.N — копии листов «Документы» и «Замечания» экранов этапов (данные на момент формирования).",
-            "Свод — состояние замечаний и загрузки по дням (формулы СУММЕСЛИМН по листам Д.N/З.N); источник диаграмм.",
-            $"{_dailySheet} — суточный отчет. Блоки «Конвертер» справа от области печати: II — загрузки за период " +
-            "(сумма всех загрузок, окончание которых попадает в период), III — замечания на отчетное время, IV — на начало периода.",
-            "Отчет — данные по разделам (ссылки на строки листов З.N); Отчет_дет — детальный отчет по листу «Отчет».",
-            "Диаграммы — диаграммы по листу «Свод».",
+            "Д.N, З.N — база: листы «Документы» и «Замечания» экранов этапов (в общей книге — вместе с прошлыми циклами " +
+            "и архивными этапами из прошлых версий отчета).",
+            "Свод — состояние замечаний и загрузки по дням за всю историю (формулы по листам Д.N/З.N); источник диаграмм.",
+            $"{_dailySheet} — суточный отчет. Блоки «Конвертер» справа от области печати: II — загрузки, III — замечания на отчетное " +
+            "время, IV — на начало периода. Если изменить отчетные дату и время (AE4, AF4), лист пересчитается на эту дату.",
+            "Отчет — данные по разделам на дату и время листа отчета; Отчет_дет — детальный отчет по листу «Отчет».",
+            "Диаграммы — диаграммы по листу «Свод». Справа, вне области печати, — настройки: период, «по состоянию на», " +
+            "окончание экспертизы (можно менять — диаграммы перестроятся), верх шкалы загрузок (применяется программой).",
             "Ячейки «Всего» подсвечиваются красным, если не совпадает сумма по статусам.",
         };
         if (master)
@@ -367,9 +400,10 @@ internal sealed class SummaryWorkbookBuilder
         // По ним «Свод» берет последнюю заполненную строку на время среза, а не только строку точно на 18:00.
         var stampCol = Math.Max(totalCol + 37, raw.LastColumn) + 2;
         var rowCol = stampCol + 1;
-        ws.Cell(2, stampCol).Value = "Последняя строка: дата и время";
+        ws.Cell(2, stampCol).Value = StampHeader;
         ws.Cell(2, rowCol).Value = "Последняя строка: номер";
-        for (var r = first; r <= raw.LastRow; r++)
+        // До запаса строк Bound: ссылки листов отчета (и прежних листов дней) не попадают на пустые ячейки.
+        for (var r = first; r <= Bound(raw.LastRow); r++)
         {
             // Без функции Ч()/N(): ее неверно считает ClosedXML (тесты), а результат тот же.
             var filled = $"AND(ISNUMBER({C(totalCol)}{r}),ISNUMBER({C(dateCol)}{r}))";
@@ -380,8 +414,8 @@ internal sealed class SummaryWorkbookBuilder
             ws.Cell(r, rowCol).FormulaA1 = $"IF({filled},ROW(),{prevRow})";
         }
 
-        ws.Range(first, stampCol, Math.Max(first, raw.LastRow), stampCol).Style.NumberFormat.Format = XlStyle.DateTimeFormat;
-        ws.Range(2, stampCol, Math.Max(first, raw.LastRow), rowCol).Style.Font.FontColor = XLColor.Gray;
+        ws.Range(first, stampCol, Bound(raw.LastRow), stampCol).Style.NumberFormat.Format = XlStyle.DateTimeFormat;
+        ws.Range(2, stampCol, Bound(raw.LastRow), rowCol).Style.Font.FontColor = XLColor.Gray;
         ws.Column(stampCol).Width = 16;
         _remarksIndex[p] = (stampCol, rowCol, first, Math.Max(first, raw.LastRow));
 
@@ -428,9 +462,29 @@ internal sealed class SummaryWorkbookBuilder
 
     // ================================================================== Свод
 
+    /// <summary>
+    /// Начало «Свода» — первая дата в данных этапов (вся история, в том числе из прошлых версий отчета), чтобы на листе
+    /// «Диаграммы» можно было выбрать любой период. Одиночная дата задолго до остальных (опечатка в годе) не учитывается.
+    /// </summary>
     private DateTime SvodStart()
     {
-        var dates = _m.Projects.Where(p => p.Daily.Count > 0).Select(p => p.Daily[0].Date).ToList();
+        var dates = new List<DateTime>();
+        foreach (var p in _loaded)
+        {
+            var days = p.Screen!.Remarks.Select(x => x.Timestamp.Date)
+                .Concat(p.Screen.Loads.Select(l => l.End.Date))
+                .Where(d => d <= _m.ReportTime.Date)
+                .Distinct()
+                .OrderBy(d => d)
+                .ToList();
+            while (days.Count > 1 && (days[1] - days[0]).TotalDays > 60)
+                days.RemoveAt(0);
+            if (days.Count > 0)
+                dates.Add(days[0]);
+            if (p.Daily.Count > 0)
+                dates.Add(p.Daily[0].Date);
+        }
+
         if (_m.Summary is { Daily.Count: > 0 } s)
             dates.Add(s.Daily[0].Date);
         return dates.Count > 0 ? dates.Min() : _m.ReportTime.Date;
@@ -445,11 +499,23 @@ internal sealed class SummaryWorkbookBuilder
         return dates.Max();
     }
 
+    // Общие настройки листа «Диаграммы» (вне области печати): по состоянию на (дата, время) и время среза прочих дней.
+    private const int SetLabel = 27;   // AA
+    private const int SetValue = 28;   // AB
+    private const int SetDefault = 29; // AC
+    private const int AsOfDateRow = 2;
+    private const int AsOfTimeRow = 3;
+    private const int SliceTimeRow = 4;
+
+    private static string ChartsCell(int row, int column = SetValue) => $"{XlStyle.Q(SummaryWorkbook.ChartsSheet)}!${C(column)}${row}";
+
     private void Svod(IXLWorksheet ws, SvodLayout svod)
     {
-        var lastSlot = _s.ReportTimes.Select(t => Formats.ParseTime(t)).Where(t => t is not null).Select(t => t!.Value)
-            .DefaultIfEmpty(new TimeSpan(18, 0, 0)).Max();
+        var asOf = ChartsCell(AsOfDateRow);
+        var asOfTime = ChartsCell(AsOfTimeRow);
+        var slice = ChartsCell(SliceTimeRow);
 
+        ws.Cell(1, 1).Value = "Загрузки до";
         ws.Cell(1, SvodLayout.DateColumn).Value = "Дата";
         ws.Cell(1, SvodLayout.WeekdayColumn).Value = "День";
         ws.Cell(1, SvodLayout.LabelColumn).Value = "Дата";
@@ -468,20 +534,24 @@ internal sealed class SummaryWorkbookBuilder
             ws.Cell(r, SvodLayout.WeekdayColumn).FormulaA1 = $"WEEKDAY(B{r},2)";
             var weekday = date.ToString("ddd", Formats.Ru);
             ws.Cell(r, SvodLayout.LabelColumn).Value = date.ToString("dd.MM.yyyy", Formats.Ru) + " " + char.ToUpper(weekday[0]) + weekday[1..];
-            // Время среза: на отчетную дату — время отчета, в остальные дни — последнее стандартное (18:00).
-            var time = date == _m.ReportTime.Date ? _m.ReportTime.TimeOfDay : lastSlot;
-            ws.Cell(r, SvodLayout.TimeColumn).Value = time.TotalDays;
+            // Время среза: на дату «по состоянию на» (лист «Диаграммы», по умолчанию — дата отчета) — время отчета,
+            // в остальные дни — последнее стандартное (18:00). Дни после нее — без данных.
+            ws.Cell(r, SvodLayout.TimeColumn).FormulaA1 = $"IF($B{r}={asOf},{asOfTime},{slice})";
+            // Загрузки дня — с 00:00 до конца дня, на дату «по состоянию на» — до времени отчета.
+            ws.Cell(r, 1).FormulaA1 = $"IF($B{r}<{asOf},$B{r}+1,IF($B{r}={asOf},$B{r}+$E{r}+0.000001,$B{r}))";
 
             for (var i = 0; i < _loaded.Count; i++)
-                BlockRow(ws, SvodLayout.Project(i), r, _loaded[i], date);
+                BlockRow(ws, SvodLayout.Project(i), r, _loaded[i], asOf);
             OverallRow(ws, r);
         }
 
+        ws.Column(1).Style.NumberFormat.Format = XlStyle.DateTimeFormat;
         ws.Column(SvodLayout.DateColumn).Style.NumberFormat.Format = XlStyle.DateFormat;
         ws.Column(SvodLayout.TimeColumn).Style.NumberFormat.Format = XlStyle.TimeFormat;
         ws.Row(1).Style.Font.Bold = true;
         ws.Row(1).Style.Alignment.WrapText = true;
-        ws.Column(1).Width = 3;
+        ws.Column(1).Width = 16;
+        ws.Column(1).Hide();
         ws.Column(SvodLayout.DateColumn).Width = 11;
         ws.Column(SvodLayout.WeekdayColumn).Width = 5;
         ws.Column(SvodLayout.LabelColumn).Width = 15;
@@ -496,6 +566,7 @@ internal sealed class SummaryWorkbookBuilder
         {
             ws.Cell(1, b.Label).Value = name;
             ws.Cell(1, b.Label).Style.Fill.BackgroundColor = XlStyle.HeaderFill;
+            ws.Cell(1, b.Marker).Value = "Окончание экспертизы";
         }
 
         string[] remarks = { "Всего", "Устранено", "Устраняется", "Рассматривается", "Устранено за сутки" };
@@ -506,7 +577,7 @@ internal sealed class SummaryWorkbookBuilder
             ws.Cell(1, b.Loads + i).Value = loads[i];
     }
 
-    private void BlockRow(IXLWorksheet ws, SvodBlock b, int r, ProjectReport p, DateTime svodDate)
+    private void BlockRow(IXLWorksheet ws, SvodBlock b, int r, ProjectReport p, string asOf)
     {
         var z = Z(p);
         var all = Col(_layout.RemarksAll);
@@ -515,13 +586,13 @@ internal sealed class SummaryWorkbookBuilder
         if (_remarksIndex.TryGetValue(p, out var index))
         {
             // Номер строки «З.N» на время среза: последняя заполненная строка не позже среза — в тот же день,
-            // а на отчетную дату — любая (как в таблице отчета, где у номера этапа ставится «*»).
+            // а на дату «по состоянию на» — не старше недели (как в таблице отчета, где у номера этапа ставится «*»;
+            // у закончившегося этапа последняя строка давняя — его на эту дату нет).
             string Rng(int column) => $"{z}!${C(column)}${index.First}:${C(column)}${index.Last}";
             var match = $"MATCH($B{r}+$E{r},{Rng(index.Stamp)},1)";
-            var reportDay = svodDate == _m.ReportTime.Date;
-            ws.Cell(r, b.Label).FormulaA1 = reportDay
-                ? $"IFERROR(INDEX({Rng(index.Row)},{match}),0)"
-                : $"IFERROR(IF(INDEX({Rng(index.Stamp)},{match})>=$B{r},INDEX({Rng(index.Row)},{match}),0),0)";
+            var since = $"IF($B{r}={asOf},$B{r}-{ReportBuilder.StaleDays},$B{r})";
+            ws.Cell(r, b.Label).FormulaA1 =
+                $"IF($B{r}>{asOf},0,IFERROR(IF(INDEX({Rng(index.Stamp)},{match})>={since},INDEX({Rng(index.Row)},{match}),0),0))";
             ws.Cell(r, b.Label).Style.Font.FontColor = XLColor.Gray;
             // Значение строки: СУММЕСЛИМН по столбцу номера строки — у пустых строк после нее номер тот же, но значения пустые.
             string Value(int column) => $"SUMIFS({Rng(column)},{Rng(index.Row)},{row})";
@@ -537,14 +608,17 @@ internal sealed class SummaryWorkbookBuilder
         }
         ws.Cell(r, b.FixedPerDay).FormulaA1 = r == SvodLayout.FirstRow ? "NA()" : $"IFERROR({C(b.Fixed)}{r}-{C(b.Fixed)}{r - 1},NA())";
 
+        // Окончание экспертизы (вертикальная линия на диаграмме этапа) — дата из настроек листа «Диаграммы».
+        if (_pages.FirstOrDefault(pg => !pg.Summary && pg.Report == p) is { } page)
+            ws.Cell(r, b.Marker).FormulaA1 = $"IF($B{r}={ChartsCell(page.ExpertiseRow)},1,NA())";
+
         var d = D(p);
         var dFirst = _layout.DocumentsFirstRow;
         var dLast = _documentsLastRow.GetValueOrDefault(p, dFirst);
         string DR(string column) => $"{d}!${column}${dFirst}:${column}${dLast}";
-        // Загрузки за день — по окончанию загрузки (Д!X, дата и время), как в разделе 1 отчета; на отчетную дату —
+        // Загрузки за день — по окончанию загрузки (Д!X, дата и время), как в разделе 1 отчета; на дату «по состоянию на» —
         // только завершенные до времени отчета (вечерний отчет и диаграмма показывают одну и ту же сумму).
-        var to = svodDate == _m.ReportTime.Date ? $"\"<=\"&($B{r}+$E{r}+0.000001)" : $"\"<\"&($B{r}+1)";
-        var day = $"{DR("X")},\">=\"&$B{r},{DR("X")},{to}";
+        var day = $"{DR("X")},\">=\"&$B{r},{DR("X")},\"<\"&$A{r}";
         var loadCols = new[] { _layout.LoadSurvey, _layout.LoadProject, _layout.LoadEstimate, _layout.LoadVor, _layout.LoadKac, _layout.LoadOther };
         for (var i = 0; i < loadCols.Length; i++)
             ws.Cell(r, b.Load(i)).FormulaA1 = $"SUMIFS({DR(loadCols[i])},{day})";
@@ -573,7 +647,10 @@ internal sealed class SummaryWorkbookBuilder
             ws.Cell(r, o.Total + k).FormulaA1 = $"IF(({any})=0,NA(),{sum})";
         }
 
-        ws.Cell(r, o.FixedPerDay).FormulaA1 = r == SvodLayout.FirstRow ? "NA()" : $"IFERROR({C(o.Fixed)}{r}-{C(o.Fixed)}{r - 1},NA())";
+        // «Устранено за сутки» — сумма по этапам: начало или окончание этапа не дает скачка в итоге.
+        var perDay = string.Join("+", blocks.Select(b => $"IF(ISNUMBER({C(b.FixedPerDay)}{r}),{C(b.FixedPerDay)}{r},0)"));
+        var anyPerDay = string.Join("+", blocks.Select(b => $"ISNUMBER({C(b.FixedPerDay)}{r})"));
+        ws.Cell(r, o.FixedPerDay).FormulaA1 = $"IF(({anyPerDay})=0,NA(),{perDay})";
         for (var i = 0; i < 10; i++)
         {
             if (i == 6)
@@ -590,7 +667,6 @@ internal sealed class SummaryWorkbookBuilder
 
     private void Daily(IXLWorksheet ws)
     {
-        var n = _projects.Count;
         ws.Style.Font.FontName = XlStyle.Font;
         ws.Style.Font.FontSize = 14;
         ws.Style.Alignment.Vertical = XLAlignmentVerticalValues.Center;
@@ -615,29 +691,50 @@ internal sealed class SummaryWorkbookBuilder
         ws.Row(3).Height = 18;
         ws.Row(4).Height = 18.75;
 
+        // AE3:AF4 — даты отчета (как в книге): если изменить AE4/AF4, лист пересчитается на эту дату по листам Д.N/З.N.
         Converter(ws, 3, "0.", "Начало периода (предыдущий отчет):");
         Converter(ws, 4, "I.", "Отчетная дата и время:");
-        ws.Cell(3, 31).Value = _m.PeriodStart.Date;
-        ws.Cell(3, 32).Value = _m.PeriodStart.TimeOfDay.TotalDays;
         ws.Cell(4, 31).Value = _m.ReportTime.Date;
         ws.Cell(4, 32).Value = _m.ReportTime.TimeOfDay.TotalDays;
+        var standardStart = ReportTime.PeriodStart(_s, _m.ReportTime);
+        if (_m.PeriodStart == standardStart)
+        {
+            // Как в книге: AE3 = AE4 − 1, AF3 = 18:00.
+            var offset = (_m.PeriodStart.Date - _m.ReportTime.Date).Days;
+            ws.Cell(3, 31).FormulaA1 = offset == 0 ? "AE4" : $"AE4{offset:+0;-0}";
+            ws.Cell(3, 32).Value = _m.PeriodStart.TimeOfDay.TotalDays;
+        }
+        else
+        {
+            // Начало периода задано вручную.
+            ws.Cell(3, 31).Value = _m.PeriodStart.Date;
+            ws.Cell(3, 32).Value = _m.PeriodStart.TimeOfDay.TotalDays;
+        }
+
         ws.Range(3, 31, 4, 31).Style.NumberFormat.Format = XlStyle.DateFormat;
         ws.Range(3, 32, 4, 32).Style.NumberFormat.Format = XlStyle.TimeFormat;
-        // Тексты для заголовка раздела 3 (без функции ТЕКСТ — она зависит от языка Excel).
-        ws.Cell(3, 34).Value = PeriodText(_m.PeriodStart);
-        ws.Cell(4, 34).Value = PeriodText(_m.ReportTime);
+        // Тексты для заголовка раздела 3 «18:00 14.10.2026».
+        ws.Cell(3, 34).FormulaA1 = TimeDateText("AE3", "AF3");
+        ws.Cell(4, 34).FormulaA1 = TimeDateText("AE4", "AF4");
         ws.Range(3, 27, 4, 34).Style.Font.FontSize = 11;
 
         // --- 1. Загрузка документов.
         ws.Cell(5, 1).Value = "1. Загрузка документов в АИС ГГЭ.";
         ws.Cell(5, 1).Style.Font.Bold = true;
-        // AE5+AF5 — начало выборки загрузок: за день (с 00:00) или с начала отчетного периода (настройка ReportLoads).
+        // AE5+AF5 — начало выборки загрузок, AG5 — 1: за день (с 00:00, включительно), 0: с начала отчетного периода
+        // (настройка ReportLoads; «авто» — вечерний отчет за день, утренний — с начала периода).
         Converter(ws, 5, "II.", "Конвертер - Документы: загрузки с");
-        ws.Cell(5, 31).Value = _m.LoadsFrom.Date;
-        ws.Cell(5, 32).Value = _m.LoadsFrom.TimeOfDay.TotalDays;
+        ws.Cell(5, 33).FormulaA1 = _s.ReportLoads switch
+        {
+            ReportLoadsMode.Day => "1",
+            ReportLoadsMode.Period => "0",
+            _ => "IF($AF$4>=$AF$3,1,0)",
+        };
+        ws.Cell(5, 31).FormulaA1 = "IF($AG$5=1,$AE$4,$AE$3)";
+        ws.Cell(5, 32).FormulaA1 = "IF($AG$5=1,0,$AF$3)";
         ws.Cell(5, 31).Style.NumberFormat.Format = XlStyle.DateFormat;
         ws.Cell(5, 32).Style.NumberFormat.Format = XlStyle.TimeFormat;
-        ws.Cell(5, 34).Value = _m.LoadsForDay ? "(за день)" : "(с начала отчетного периода)";
+        ws.Cell(5, 34).FormulaA1 = "IF($AG$5=1,\"(за день)\",\"(с начала отчетного периода)\")";
         ws.Range(5, 31, 5, 34).Style.Font.FontSize = 11;
         ws.Row(5).Height = 18;
         ws.Row(6).Height = 9;
@@ -658,38 +755,49 @@ internal sealed class SummaryWorkbookBuilder
         ws.Range(h, 1, h + 1, 26).Box();
         ws.Row(h).Height = 17.4;
         ws.Row(h + 1).Height = 18.75;
-        ConverterLoadsHeader(ws, h);
+        var each = _s.LoadsMode == LoadsMode.Each;
+        ConverterLoadsHeader(ws, h, each);
 
+        // Строки раздела 1: по этапу (сумма загрузок) или по загрузке — 1, 2, 3… у каждого этапа.
+        var loadRows = new List<(ProjectReport P, int K)>();
+        foreach (var p in _projects)
+        {
+            var count = each ? Math.Max(1, p.PeriodLoads.Count) : 1;
+            for (var k = 1; k <= count; k++)
+                loadRows.Add((p, k));
+        }
+
+        var n1 = loadRows.Count;
         var first1 = h + 2;
-        for (var i = 0; i < n; i++)
+        for (var i = 0; i < n1; i++)
         {
             var r = first1 + i;
-            var p = _projects[i];
+            var (p, k) = loadRows[i];
             ws.Put(r, 1, r, 2, XlStyle.Stage(p.Number)).Set(14, bold: true);
             ws.Put(r, 3, r, 3, F($"AB{r}")).Set(14);
-            ws.Put(r, 4, r, 5, F($"IF($AB{r}=0,\"\",AC{r})")).Set(10, format: XlStyle.DateFormat);
-            ws.Put(r, 6, r, 7, F($"IF($AB{r}=0,\"\",AD{r})")).Set(10, format: XlStyle.TimeFormat);
-            ws.Put(r, 8, r, 9, F($"IF($AB{r}=0,\"\",AE{r})")).Set(10, format: XlStyle.DateFormat);
-            ws.Put(r, 10, r, 11, F($"IF($AB{r}=0,\"\",AF{r})")).Set(10, format: XlStyle.TimeFormat);
-            for (var k = 0; k < 6; k++)
-                ws.Put(r, 12 + k * 2, r, 13 + k * 2, F($"{C(33 + k)}{r}")).Set(14, align: XLAlignmentHorizontalValues.Right, format: XlStyle.IntFormat);
+            ws.Put(r, 4, r, 5, F($"AC{r}")).Set(10, format: XlStyle.DateFormat);
+            ws.Put(r, 6, r, 7, F($"AD{r}")).Set(10, format: XlStyle.TimeFormat);
+            ws.Put(r, 8, r, 9, F($"AE{r}")).Set(10, format: XlStyle.DateFormat);
+            ws.Put(r, 10, r, 11, F($"AF{r}")).Set(10, format: XlStyle.TimeFormat);
+            for (var c = 0; c < 6; c++)
+                ws.Put(r, 12 + c * 2, r, 13 + c * 2, F($"{C(33 + c)}{r}")).Set(14, align: XLAlignmentHorizontalValues.Right, format: XlStyle.IntFormat);
             ws.Put(r, 24, r, 26, F($"AM{r}")).Set(14, bold: true, align: XLAlignmentHorizontalValues.Right, format: XlStyle.IntFormat);
             ws.Row(r).Height = 18;
-            ConverterLoadsRow(ws, r, p);
-            // Этапы без загрузок за период скрываются (как в книге — строки не удаляются).
+            ConverterLoadsRow(ws, r, p, each ? k : null);
+            // Этапы без загрузок скрываются (как в книге — строки не удаляются).
             if (_s.HideProjectsWithoutLoads && p.PeriodLoads.Count == 0)
                 ws.Row(r).Hide();
         }
 
-        if (n > 0)
-            ws.Range(first1, 1, first1 + n - 1, 26).Box();
-        var t1 = first1 + n;
+        if (n1 > 0)
+            ws.Range(first1, 1, first1 + n1 - 1, 26).Box();
+        var t1 = first1 + n1;
         ws.Put(t1, 10, t1, 11, "Всего:").Set(14, bold: true, align: XLAlignmentHorizontalValues.Right);
         for (var k = 0; k < 7; k++)
         {
             var c1 = 12 + k * 2;
             var c2 = k == 6 ? 26 : c1 + 1;
-            ws.Put(t1, c1, t1, c2, F(n == 0 ? "0" : $"SUM({C(c1)}{first1}:{C(c1)}{t1 - 1})"))
+            ws.Put(t1, c1, t1, c2, F(n1 == 0 ? "0" : $"SUM({C(c1)}{first1}:{C(c1)}{t1 - 1})"))
                 .Set(14, bold: true, align: XLAlignmentHorizontalValues.Right, format: XlStyle.IntFormat);
         }
 
@@ -697,13 +805,12 @@ internal sealed class SummaryWorkbookBuilder
         ws.Row(t1).Height = 18;
         // Пунктир между датой и временем (как в книге).
         foreach (var c in new[] { 6, 10 })
-            ws.VLine(h + 1, Math.Max(h + 1, first1 + n - 1), c, XLBorderStyleValues.Dotted);
+            ws.VLine(h + 1, Math.Max(h + 1, first1 + n1 - 1), c, XLBorderStyleValues.Dotted);
         ws.Row(t1 + 1).Height = 18;
-        ConverterLoadsTotal(ws, t1, first1, n);
-        if (_projects.All(p => p.PeriodLoads.Count == 0))
-        {
-            ws.Put(t1 + 1, 1, t1 + 1, 26, _m.NoLoadsText).Set(12, italic: true, align: XLAlignmentHorizontalValues.Left);
-        }
+        ConverterLoadsTotal(ws, t1, first1, n1);
+        ws.Put(t1 + 1, 1, t1 + 1, 26,
+                F($"IF($X${t1}=0,IF($AG$5=1,\"За день загрузок документов не было.\",\"За отчетный период загрузок документов не было.\"),\"\")"))
+            .Set(12, italic: true, align: XLAlignmentHorizontalValues.Left);
 
         // --- 2. Устранение замечаний.
         var s2 = t1 + 2;
@@ -712,6 +819,7 @@ internal sealed class SummaryWorkbookBuilder
         ws.Row(s2).Height = 17.4;
         ws.Row(s2 + 1).Height = 9;
         var h2 = s2 + 2;
+        var n = _projects.Count;
         StatusHeader(ws, h2);
         Converter(ws, h2, "III.", "Конвертер - Замечания (строка экрана на отчетное время)");
         ConverterRemarksHeader(ws, h2, 29);
@@ -719,17 +827,27 @@ internal sealed class SummaryWorkbookBuilder
         ws.Cell(h2, 38).Style.Font.Bold = true;
         ws.Cell(h2, 38).Style.Font.FontSize = 11;
         ConverterRemarksHeader(ws, h2, 39);
+        ws.Cell(h2 + 2, CurrentRowCol).Value = "Строка З";
+        ws.Cell(h2 + 2, PreviousRowCol).Value = "Строка З";
+        ws.Cell(h2 + 2, CurrentStampCol).Value = "Время строки";
+        ws.Range(h2 + 2, CurrentRowCol, h2 + 2, CurrentStampCol).Style.Font.Bold = true;
+        ws.Range(h2 + 2, CurrentRowCol, h2 + 2, CurrentStampCol).Style.Font.FontSize = 10;
 
         var first2 = h2 + 3;
         for (var i = 0; i < n; i++)
         {
             var r = first2 + i;
             var p = _projects[i];
-            var label = p.IsStale(_m.ReportTime) ? p.Number + "*" : p.Number;
-            ws.Put(r, 1, r, 2, p.IsStale(_m.ReportTime) ? label : XlStyle.Stage(p.Number)).Set(14, bold: true);
+            ConverterRemarksRow(ws, r, 29, CurrentRowCol, p, "$AE$4+$AF$4", CurrentStampCol);
+            ConverterRemarksRow(ws, r, 39, PreviousRowCol, p, "$AE$3+$AF$3", null);
+            // «*» у номера этапа: строки экрана на отчетное время нет — использована более ранняя (если включено).
+            var number = int.TryParse(p.Number, out var num) ? num.ToString(System.Globalization.CultureInfo.InvariantCulture) : Quote(p.Number);
+            var stamp = $"${C(CurrentStampCol)}{r}";
+            if (_s.MarkStaleData)
+                ws.Put(r, 1, r, 2, F($"IF({stamp}=\"\",{number},IF(ABS({stamp}-($AE$4+$AF$4))<0.0001,{number},{Quote(p.Number + "*")}))")).Set(14, bold: true);
+            else
+                ws.Put(r, 1, r, 2, XlStyle.Stage(p.Number)).Set(14, bold: true);
             StatusRow(ws, r, r, r, false);
-            ConverterRemarksRow(ws, r, 29, p, p.Current);
-            ConverterRemarksRow(ws, r, 39, p, p.Previous ?? p.Current);
         }
 
         var t2 = first2 + n;
@@ -743,7 +861,7 @@ internal sealed class SummaryWorkbookBuilder
             ws.Row(first2 + n - 1).Height = 18.75;
         ws.Row(t2).Height = 18.75;
         ws.Row(t2 + 1).Height = 18.75;
-        StaleNotes(ws, t2 + 1);
+        StaleNotes(ws, t2 + 1, first2);
 
         // --- 3. Изменение за период.
         var s3 = t2 + 2;
@@ -823,8 +941,23 @@ internal sealed class SummaryWorkbookBuilder
         ws.SheetView.ZoomScaleSheetLayoutView = 64;
     }
 
-    private static string PeriodText(DateTime value) =>
-        value.ToString("H:mm", Formats.Ru) + " " + value.ToString("dd.MM.yyyy", Formats.Ru);
+    // Служебные столбцы блоков «Конвертер - Замечания»: строка листа З.N на отчетное время и на начало периода,
+    // время этой строки (для «*» у номера этапа).
+    private const int CurrentRowCol = 37;   // AK
+    private const int PreviousRowCol = 47;  // AU
+    private const int CurrentStampCol = 48; // AV
+
+    /// <summary>
+    /// «18:00 14.10.2026» по ячейкам даты и времени — без ТЕКСТ с форматом даты (он зависит от языка Excel).
+    /// </summary>
+    private static string TimeDateText(string date, string time) =>
+        $"HOUR({time})&\":\"&TEXT(MINUTE({time}),\"00\")&\" \"&TEXT(DAY({date}),\"00\")&\".\"&TEXT(MONTH({date}),\"00\")&\".\"&YEAR({date})";
+
+    /// <summary>«15.10.2026 08:00» по моменту (дата+время).</summary>
+    private static string DateTimeText(string moment) =>
+        $"TEXT(DAY({moment}),\"00\")&\".\"&TEXT(MONTH({moment}),\"00\")&\".\"&YEAR({moment})&\" \"&TEXT(HOUR({moment}),\"00\")&\":\"&TEXT(MINUTE({moment}),\"00\")";
+
+    private static string Quote(string text) => "\"" + text.Replace("\"", "\"\"") + "\"";
 
     private static void Converter(IXLWorksheet ws, int row, string number, string title)
     {
@@ -834,10 +967,10 @@ internal sealed class SummaryWorkbookBuilder
         ws.Range(row, 27, row, 28).Style.Font.FontSize = 11;
     }
 
-    private static void ConverterLoadsHeader(IXLWorksheet ws, int h)
+    private static void ConverterLoadsHeader(IXLWorksheet ws, int h, bool each)
     {
-        string[] top = { "Этап", "Кол-во загрузок", "Начало загрузки", "", "Окончание загрузки", "", "Загрузка" };
-        string[] sub = { "", "", "Дата", "Время", "Дата", "Время", "ИИ", "ПД", "СМ", "ВОР", "КАЦ", "Иные", "Всего", "Ответы", "Аннулировано", "Ошибки", "", "Начало (дата и время)", "Окончание (дата и время)" };
+        string[] top = { "Этап", each ? "№ загрузки" : "Кол-во загрузок", "Начало загрузки", "", "Окончание загрузки", "", "Загрузка" };
+        string[] sub = { "", "", "Дата", "Время", "Дата", "Время", "ИИ", "ПД", "СМ", "ВОР", "КАЦ", "Иные", "Всего", "Ответы", "Аннулировано", "Ошибки", each ? "Строка Д" : "", "Начало (дата и время)", "Окончание (дата и время)" };
         for (var i = 0; i < top.Length; i++)
             ws.Cell(h, 27 + i).Value = top[i];
         for (var i = 0; i < sub.Length; i++)
@@ -850,38 +983,59 @@ internal sealed class SummaryWorkbookBuilder
     }
 
     /// <summary>
-    /// Блок «Конвертер - Документы»: загрузки этапа, окончание которых попадает в выборку раздела 1:
-    /// [AE5+AF5; AE4+AF4] за день или (AE5+AF5; AE4+AF4] с начала периода.
+    /// Блок «Конвертер - Документы»: загрузки этапа, окончание которых попадает в выборку раздела 1 —
+    /// [AE5+AF5; AE4+AF4] за день (AG5 = 1) или (AE5+AF5; AE4+AF4] с начала периода.
+    /// <paramref name="k"/> = null — сумма загрузок этапа; иначе — k-я загрузка этапа (строка листа Д.N — в AQ).
     /// </summary>
-    private void ConverterLoadsRow(IXLWorksheet ws, int r, ProjectReport p)
+    private void ConverterLoadsRow(IXLWorksheet ws, int r, ProjectReport p, int? k = null)
     {
         var d = D(p);
-        var last = _documentsLastRow.GetValueOrDefault(p, _layout.DocumentsFirstRow);
+        var last = Bound(_documentsLastRow.GetValueOrDefault(p, _layout.DocumentsFirstRow));
         var first = _layout.DocumentsFirstRow;
         string Rng(string col) => $"{d}!${col}${first}:${col}${last}";
-        var from = _m.LoadsForDay ? ">=" : ">";
-        var cond = $"(({Rng("X")}{from}$AE$5+$AF$5)*({Rng("X")}<=$AE$4+$AF$4))";
+        var x = Rng("X");
+        var cond = $"((({x}>$AE$5+$AF$5)+({x}=$AE$5+$AF$5)*$AG$5)*({x}<=$AE$4+$AF$4))";
+        var cols = new[] { _layout.LoadSurvey, _layout.LoadProject, _layout.LoadEstimate, _layout.LoadVor, _layout.LoadKac, _layout.LoadOther };
+        var extra = new[] { _layout.LoadAnswers, _layout.LoadCancelled, _layout.LoadErrors };
 
         ws.Cell(r, 27).Value = XlStyle.StageCell(p.Number);
-        ws.Cell(r, 28).FormulaA1 = $"SUMPRODUCT({cond}*1)";
-        // AR/AS — начало первой и окончание последней загрузки периода (дата и время).
-        // Округление до минуты, чтобы время отображалось без погрешности (22:20, а не 22:19).
-        ws.Cell(r, 44).FormulaA1 = $"IF($AB{r}=0,\"\",ROUND(SUMPRODUCT(MIN({Rng("W")}+(1-{cond})*1E+9))*1440,0)/1440)";
-        ws.Cell(r, 45).FormulaA1 = $"IF($AB{r}=0,\"\",ROUND(SUMPRODUCT(MAX({Rng("X")}*{cond}))*1440,0)/1440)";
+        if (k is { } number)
+        {
+            // k-я по порядку строк загрузка выборки (АГРЕГАТ: k-е наименьшее из номеров строк, где условие выполнено).
+            ws.Cell(r, 43).FormulaA1 = $"IFERROR(AGGREGATE(15,6,ROW({x})/{cond},{number}),0)";
+            string At(string col) => $"INDEX({d}!${col}$1:${col}${last},$AQ{r})";
+            ws.Cell(r, 28).FormulaA1 = $"IF($AQ{r}=0,\"\",{number})";
+            ws.Cell(r, 44).FormulaA1 = $"IF($AQ{r}=0,\"\",ROUND({At("W")}*1440,0)/1440)";
+            ws.Cell(r, 45).FormulaA1 = $"IF($AQ{r}=0,\"\",ROUND({At("X")}*1440,0)/1440)";
+            for (var c = 0; c < cols.Length; c++)
+                ws.Cell(r, 33 + c).FormulaA1 = $"IF($AQ{r}=0,0,N({At(cols[c])}))";
+            for (var c = 0; c < extra.Length; c++)
+            {
+                if (!string.IsNullOrWhiteSpace(extra[c]))
+                    ws.Cell(r, 40 + c).FormulaA1 = $"IF($AQ{r}=0,0,N({At(extra[c])}))";
+            }
+        }
+        else
+        {
+            ws.Cell(r, 28).FormulaA1 = $"SUMPRODUCT({cond}*1)";
+            // AR/AS — начало первой и окончание последней загрузки периода (дата и время).
+            // Округление до минуты, чтобы время отображалось без погрешности (22:20, а не 22:19).
+            ws.Cell(r, 44).FormulaA1 = $"IF($AB{r}=0,\"\",ROUND(SUMPRODUCT(MIN({Rng("W")}+(1-{cond})*1E+9))*1440,0)/1440)";
+            ws.Cell(r, 45).FormulaA1 = $"IF($AB{r}=0,\"\",ROUND(SUMPRODUCT(MAX({x}*{cond}))*1440,0)/1440)";
+            for (var c = 0; c < cols.Length; c++)
+                ws.Cell(r, 33 + c).FormulaA1 = $"SUMPRODUCT({cond}*{Rng(cols[c])})";
+            for (var c = 0; c < extra.Length; c++)
+            {
+                if (!string.IsNullOrWhiteSpace(extra[c]))
+                    ws.Cell(r, 40 + c).FormulaA1 = $"SUMPRODUCT({cond}*{Rng(extra[c])})";
+            }
+        }
+
         ws.Cell(r, 29).FormulaA1 = $"IF($AR{r}=\"\",\"\",INT($AR{r}))";
         ws.Cell(r, 30).FormulaA1 = $"IF($AR{r}=\"\",\"\",TIME(INT(ROUND(MOD($AR{r},1)*1440,0)/60),MOD(ROUND(MOD($AR{r},1)*1440,0),60),0))";
         ws.Cell(r, 31).FormulaA1 = $"IF($AS{r}=\"\",\"\",INT($AS{r}))";
         ws.Cell(r, 32).FormulaA1 = $"IF($AS{r}=\"\",\"\",TIME(INT(ROUND(MOD($AS{r},1)*1440,0)/60),MOD(ROUND(MOD($AS{r},1)*1440,0),60),0))";
-        var cols = new[] { _layout.LoadSurvey, _layout.LoadProject, _layout.LoadEstimate, _layout.LoadVor, _layout.LoadKac, _layout.LoadOther };
-        for (var k = 0; k < cols.Length; k++)
-            ws.Cell(r, 33 + k).FormulaA1 = $"SUMPRODUCT({cond}*{Rng(cols[k])})";
         ws.Cell(r, 39).FormulaA1 = $"SUM(AG{r}:AL{r})";
-        var extra = new[] { _layout.LoadAnswers, _layout.LoadCancelled, _layout.LoadErrors };
-        for (var k = 0; k < extra.Length; k++)
-        {
-            if (!string.IsNullOrWhiteSpace(extra[k]))
-                ws.Cell(r, 40 + k).FormulaA1 = $"SUMPRODUCT({cond}*{Rng(extra[k])})";
-        }
 
         ws.Range(r, 29, r, 29).Style.NumberFormat.Format = XlStyle.DateFormat;
         ws.Range(r, 31, r, 31).Style.NumberFormat.Format = XlStyle.DateFormat;
@@ -915,25 +1069,44 @@ internal sealed class SummaryWorkbookBuilder
         range.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
     }
 
-    /// <summary>Строка блока «Конвертер - Замечания»: ссылки на строку листа «З.N».</summary>
-    private void ConverterRemarksRow(IXLWorksheet ws, int r, int col, ProjectReport p, RemarksSnapshot? snapshot)
+    /// <summary>
+    /// Строка блока «Конвертер - Замечания»: строка листа «З.N» на момент <paramref name="moment"/> (последняя заполненная
+    /// не позже него — номер в столбце <paramref name="rowCol"/>) и ее значения. При изменении дат отчета (AE3:AF4)
+    /// строка находится заново.
+    /// </summary>
+    private void ConverterRemarksRow(IXLWorksheet ws, int r, int col, int rowCol, ProjectReport p, string moment, int? stampCol)
     {
         ws.Cell(r, col - 1).Value = XlStyle.StageCell(p.Number);
         string[] src = { _layout.RemarksAll, _layout.CriticalAll };
+        if (!_remarksIndex.TryGetValue(p, out var index))
+        {
+            for (var k = 0; k < 8; k++)
+                ws.Cell(r, col + k).Value = 0;
+            ws.Cell(r, rowCol).Value = 0;
+            if (stampCol is { } empty)
+                ws.Cell(r, empty).Value = "";
+            return;
+        }
+
+        string Rng(int column) => $"{Z(p)}!${C(column)}${index.First}:${C(column)}${Bound(index.Last)}";
+        var match = $"MATCH({moment},{Rng(index.Stamp)},1)";
+        var row = $"${C(rowCol)}{r}";
+        ws.Cell(r, rowCol).FormulaA1 = $"IFERROR(INDEX({Rng(index.Row)},{match}),0)";
+        if (stampCol is { } sc)
+        {
+            ws.Cell(r, sc).FormulaA1 = $"IF({row}=0,\"\",INDEX({Rng(index.Stamp)},{match}))";
+            ws.Cell(r, sc).Style.NumberFormat.Format = XlStyle.DateTimeFormat;
+        }
+
         for (var block = 0; block < 2; block++)
         {
             var start = Col(src[block]);
             for (var k = 0; k < 4; k++)
-            {
-                var cell = ws.Cell(r, col + block * 4 + k);
-                if (snapshot is null || snapshot.Row <= 0)
-                    cell.Value = 0;
-                else
-                    cell.FormulaA1 = $"{Z(p)}!{C(start + k)}{snapshot.Row}";
-            }
+                ws.Cell(r, col + block * 4 + k).FormulaA1 = $"IF({row}=0,0,SUMIFS({Rng(start + k)},{Rng(index.Row)},{row}))";
         }
 
         ws.Range(r, col - 1, r, col + 7).Style.Font.FontSize = 11;
+        ws.Cell(r, rowCol).Style.Font.FontColor = XLColor.Gray;
     }
 
     private static void ConverterRemarksTotal(IXLWorksheet ws, int t, int first, int n, int col)
@@ -1047,15 +1220,18 @@ internal sealed class SummaryWorkbookBuilder
         ws.Row(r).Height = 18;
     }
 
-    private void StaleNotes(IXLWorksheet ws, int row)
+    /// <summary>Примечание «* Этап N: данные экрана на …» — формулой по номерам этапов раздела 2 (со «*»).</summary>
+    private void StaleNotes(IXLWorksheet ws, int row, int first2)
     {
-        var stale = _projects.Where(p => p.IsStale(_m.ReportTime)).ToList();
-        if (stale.Count == 0)
+        if (_projects.Count == 0 || !_s.MarkStaleData)
             return;
-        var text = string.Join(" ", stale.Select(p =>
-            $"* Этап {p.Number}: данные экрана на {Formats.DateTimeText(p.Current!.Timestamp)} (на отчетное время строка не заполнена)."));
-        ws.Put(row, 1, row, 26, text).Set(9, italic: true, align: XLAlignmentHorizontalValues.Left, wrap: true);
-        var lines = (int)Math.Ceiling(text.Length / 150.0);
+        var parts = _projects.Select((p, i) =>
+            $"IF(RIGHT($A${first2 + i},1)=\"*\",{Quote($"* Этап {p.Number}: данные экрана на ")}&" +
+            $"{DateTimeText($"${C(CurrentStampCol)}${first2 + i}")}&\" (на отчетное время строка не заполнена). \",\"\")");
+        ws.Put(row, 1, row, 26, F("TRIM(" + string.Join("&", parts) + ")"))
+            .Set(9, italic: true, align: XLAlignmentHorizontalValues.Left, wrap: true);
+        var stale = _projects.Count(p => p.IsStale(_m.ReportTime));
+        var lines = (int)Math.Ceiling(stale * 75 / 150.0);
         ws.Row(row).Height = Math.Max(18.75, lines * 12.5);
     }
 
@@ -1175,7 +1351,8 @@ internal sealed class SummaryWorkbookBuilder
         ws.Put(1, 1, 15, _s.Title).Set(14, bold: true);
         ws.Put(2, 1, 15, _s.Subtitle).Set(9);
         ws.Put(3, 1, 15, _m.Caption).Set(9);
-        ws.Put(4, 1, 15, $"по состоянию на {Formats.DateTimeText(_m.ReportTime)}").Set(9);
+        var moment = $"{XlStyle.Q(_dailySheet)}!$AE$4+{XlStyle.Q(_dailySheet)}!$AF$4";
+        ws.Put(4, 1, 15, F($"\"по состоянию на \"&{DateTimeText($"({moment})")}")).Set(9);
 
         string[] top = { "Всего", "Устранено", "%", "Устраняется", "%", "Рассм. ГГЭ", "%" };
         string[] allCols = { _layout.RemarksAll, _layout.RemarksSurvey, _layout.RemarksTech, _layout.RemarksEstimate };
@@ -1202,6 +1379,8 @@ internal sealed class SummaryWorkbookBuilder
             }
 
             ws.Range(r, 1, r, 15).Set(9, bold: true);
+            ws.Cell(r, 17).Value = "Строка З";
+            ws.Cell(r, 17).Style.Font.FontColor = XLColor.Gray;
             r++;
             var first = r;
             foreach (var p in _projects)
@@ -1234,10 +1413,21 @@ internal sealed class SummaryWorkbookBuilder
         Margins(ps);
     }
 
+    /// <summary>
+    /// Строка этапа: строка листа «З.N» на дату и время листа отчета (столбец Q, последняя заполненная не позже)
+    /// и ее значения — при изменении даты в листе отчета пересчитывается.
+    /// </summary>
     private void DataRow(IXLWorksheet ws, int r, ProjectReport p, int allCol, int critCol)
     {
-        var row = p.Current?.Row ?? 0;
         int[] src = { allCol, critCol };
+        _remarksIndex.TryGetValue(p, out var index);
+        string Rng(int column) => $"{Z(p)}!${C(column)}${index.First}:${C(column)}${Bound(index.Last)}";
+        var moment = $"{XlStyle.Q(_dailySheet)}!$AE$4+{XlStyle.Q(_dailySheet)}!$AF$4";
+        if (index.First > 0)
+            ws.Cell(r, 17).FormulaA1 = $"IFERROR(INDEX({Rng(index.Row)},MATCH({moment},{Rng(index.Stamp)},1)),0)";
+        else
+            ws.Cell(r, 17).Value = 0;
+        ws.Cell(r, 17).Style.Font.FontColor = XLColor.Gray;
         for (var block = 0; block < 2; block++)
         {
             var b = 2 + block * 7;
@@ -1245,10 +1435,10 @@ internal sealed class SummaryWorkbookBuilder
             for (var k = 0; k < 4; k++)
             {
                 var cell = ws.Cell(r, b + offsets[k]);
-                if (row <= 0)
+                if (index.First <= 0)
                     cell.Value = 0;
                 else
-                    cell.FormulaA1 = $"{Z(p)}!{C(src[block] + k)}{row}";
+                    cell.FormulaA1 = $"IF($Q{r}=0,0,SUMIFS({Rng(src[block] + k)},{Rng(index.Row)},$Q{r}))";
             }
 
             Percents(ws, r, b);
@@ -1405,15 +1595,40 @@ internal sealed class SummaryWorkbookBuilder
     // ================================================================== «Диаграммы»
 
     private const int PageRows = 52;
+    private const string SummaryKey = "Сводная диаграмма";
 
-    private int ChartsSheet(IXLWorksheet ws, SvodLayout svod, out List<ChartPlacement> placements)
+    /// <summary>
+    /// Страница листа «Диаграммы»: две диаграммы и справа, вне области печати, настройки — период, окончание экспертизы,
+    /// верх шкалы загрузок, заголовок; служебные ячейки — строки «Свода» выбранного периода (для именованных диапазонов рядов).
+    /// </summary>
+    private sealed record ChartPage(int Index, ProjectReport Report, SvodBlock Block, bool Summary)
     {
-        placements = new List<ChartPlacement>();
-        // Ширины — как на листе «Диаграммы-2» книги отчета.
-        double[] widths = { 2, 10.66, 9.1, 10.1, 9.55, 9.1, 9.1, 11.33, 9.1, 9.1, 9.1, 9.1, 9.1, 9.1, 16.44, 9.1, 9.1, 16.44, 2.55, 11.66, 9.1, 9.1, 9.1, 9 };
-        for (var c = 0; c < widths.Length; c++)
-            ws.Width(c + 1, widths[c]);
+        public int Top => 1 + Index * PageRows;
 
+        public int KeyRow => Top + 6;
+
+        public int StartRow => KeyRow + 1;
+
+        public int EndRow => KeyRow + 2;
+
+        public int ExpertiseRow => KeyRow + 3;
+
+        public int AxisRow => KeyRow + 4;
+
+        public int TitleRow => KeyRow + 5;
+
+        public int RowsRow => KeyRow + 6;
+
+        public int FlagsRow => KeyRow + 7;
+
+        public string Key => Summary ? SummaryKey : $"Этап {Report.Number}";
+
+        /// <summary>Имя диапазона страницы (на уровне листа «Диаграммы»): p1_cat, p1_s0…</summary>
+        public string Name(string suffix) => $"p{Index + 1}_{suffix}";
+    }
+
+    private List<ChartPage> PlanPages()
+    {
         var items = new List<(ProjectReport Report, SvodBlock Block, bool Summary)>();
         if (_m.Summary is not null && _m.Config.Charts.SummaryChart && _loaded.Count > 1)
             items.Add((_m.Summary, SvodLayout.Overall, true));
@@ -1423,63 +1638,204 @@ internal sealed class SummaryWorkbookBuilder
                 items.Add((p, SvodLayout.Project(_loaded.IndexOf(p)), false));
         }
 
-        var cs = _m.Config.Charts;
-        var page = 0;
-        foreach (var (report, block, summary) in items)
+        var pages = new List<ChartPage>();
+        foreach (var (report, block, summary) in items.Where(i => i.Report.Daily.Count > 0))
+            pages.Add(new ChartPage(pages.Count, report, block, summary));
+        return pages;
+    }
+
+    /// <summary>Верх шкалы загрузок, измененный вручную в прежнем листе «Диаграммы» (значение ≠ значения по умолчанию рядом).</summary>
+    private void ReadAxisOverrides(IXLWorksheet ws)
+    {
+        string? key = null;
+        var last = ws.LastRowUsed()?.RowNumber() ?? 0;
+        for (var r = 1; r <= last; r++)
         {
-            if (report.Daily.Count == 0)
-                continue;
-            var top = 1 + page * PageRows;
-            var name = summary
-                ? Formats.ApplyTemplate(cs.SummaryName, values: new Dictionary<string, string> { ["projects"] = ShortList() })
-                : report.Name;
-            var names = new Dictionary<string, string> { ["name"] = name, ["number"] = report.Number };
-            var r1 = svod.Row(report.Daily[0].Date);
-            var r2 = svod.Row(report.Daily[^1].Date);
-            var reportRow = Math.Clamp(svod.Row(_m.ReportTime.Date), r1, r2);
-            var cats = SvodLayout.Ref(SvodLayout.LabelColumn, r1, r2);
+            var label = ws.Cell(r, SetLabel).GetString().Trim();
+            if (label == SummaryKey || label.StartsWith("Этап ", StringComparison.Ordinal))
+                key = label;
+            else if (key is not null && label.StartsWith("Верх шкалы загрузок", StringComparison.Ordinal)
+                     && ws.Cell(r, SetValue).Value is { IsNumber: true } value)
+            {
+                var standard = ws.Cell(r, SetDefault).Value;
+                if (!standard.IsNumber || Math.Abs(standard.GetNumber() - value.GetNumber()) > 1e-9)
+                    _axisOverrides[key] = value.GetNumber();
+            }
+        }
+    }
+
+    private int ChartsSheet(IXLWorksheet ws, SvodLayout svod, out List<ChartPlacement> placements)
+    {
+        _chartsSheet = ws;
+        placements = new List<ChartPlacement>();
+        // Ширины — как на листе «Диаграммы-2» книги отчета.
+        double[] widths = { 2, 10.66, 9.1, 10.1, 9.55, 9.1, 9.1, 11.33, 9.1, 9.1, 9.1, 9.1, 9.1, 9.1, 16.44, 9.1, 9.1, 16.44, 2.55, 11.66, 9.1, 9.1, 9.1, 9 };
+        for (var c = 0; c < widths.Length; c++)
+            ws.Width(c + 1, widths[c]);
+        ws.Width(SetLabel, 38);
+        ws.Width(SetValue, 14);
+        ws.Width(SetDefault, 12);
+
+        var cs = _m.Config.Charts;
+        var lastSlot = _s.ReportTimes.Select(t => Formats.ParseTime(t)).Where(t => t is not null).Select(t => t!.Value)
+            .DefaultIfEmpty(new TimeSpan(18, 0, 0)).Max();
+
+        // --- Общие настройки: по состоянию на (по умолчанию — дата и время листа отчета), срез остальных дней.
+        ws.Cell(1, SetLabel).Value = "Настройки диаграмм (не печатаются)";
+        ws.Cell(1, SetLabel).Style.Font.Bold = true;
+        ws.Cell(AsOfDateRow, SetLabel).Value = "По состоянию на: дата";
+        ws.Cell(AsOfDateRow, SetValue).FormulaA1 = $"{XlStyle.Q(_dailySheet)}!$AE$4";
+        ws.Cell(AsOfDateRow, SetValue).Style.NumberFormat.Format = XlStyle.DateFormat;
+        ws.Cell(AsOfTimeRow, SetLabel).Value = "По состоянию на: время";
+        ws.Cell(AsOfTimeRow, SetValue).FormulaA1 = $"{XlStyle.Q(_dailySheet)}!$AF$4";
+        ws.Cell(AsOfTimeRow, SetValue).Style.NumberFormat.Format = XlStyle.TimeFormat;
+        ws.Cell(SliceTimeRow, SetLabel).Value = "Срез прочих дней (время)";
+        ws.Cell(SliceTimeRow, SetValue).Value = lastSlot.TotalDays;
+        ws.Cell(SliceTimeRow, SetValue).Style.NumberFormat.Format = XlStyle.TimeFormat;
+        ws.Range(5, SetLabel, 5, SetLabel + 4).Merge().Value =
+            "Период, дату «по состоянию на» и окончание экспертизы можно менять — диаграммы перестроятся. " +
+            "Верх шкалы загрузок применяется при следующем формировании отчета программой (или вручную: Формат оси → Максимум).";
+        ws.Range(5, SetLabel, 5, SetLabel + 4).Style.Alignment.WrapText = true;
+        ws.Range(5, SetLabel, 5, SetLabel + 4).Style.Font.Italic = true;
+        ws.Row(5).Height = 45;
+        ws.Range(AsOfDateRow, SetValue, SliceTimeRow, SetValue).Style.Fill.BackgroundColor = XlStyle.ConverterFill;
+
+        var first = SvodLayout.FirstRow;
+        var last = svod.LastRow;
+        string Svod(int col) => $"{SvodLayout.SheetName}!${C(col)}${first}:${C(col)}${last}";
+        var dates = Svod(SvodLayout.DateColumn);
+        var asOf = $"${C(SetValue)}${AsOfDateRow}";
+
+        foreach (var page in _pages)
+        {
+            var report = page.Report;
+            var summary = page.Summary;
+            var block = page.Block;
+            var top = page.Top;
+            var from = report.Daily[0].Date;
+            var to = report.Daily[^1].Date;
+            var start = $"${C(SetValue)}${page.StartRow}";
+            var end = $"${C(SetValue)}${page.EndRow}";
+            var expertise = $"${C(SetValue)}${page.ExpertiseRow}";
+
+            // --- Настройки страницы.
+            ws.Cell(page.KeyRow, SetLabel).Value = page.Key;
+            ws.Cell(page.KeyRow, SetLabel).Style.Font.Bold = true;
+            ws.Cell(page.StartRow, SetLabel).Value = "Начало периода";
+            ws.Cell(page.StartRow, SetValue).Value = from;
+            ws.Cell(page.EndRow, SetLabel).Value = "Конец периода";
+            ws.Cell(page.EndRow, SetValue).Value = to;
+            ws.Range(page.StartRow, SetValue, page.EndRow, SetValue).Style.NumberFormat.Format = XlStyle.DateFormat;
+            if (!summary)
+            {
+                ws.Cell(page.ExpertiseRow, SetLabel).Value = "Окончание экспертизы (вертикальная линия)";
+                if (report.ExpertiseEnd is { } e)
+                    ws.Cell(page.ExpertiseRow, SetValue).Value = e.Date;
+                ws.Cell(page.ExpertiseRow, SetValue).Style.NumberFormat.Format = XlStyle.DateFormat;
+            }
+
+            // Верх шкалы загрузок: для сводной и для этапов — общие, у этапа может быть свой (0 — автоматически);
+            // значение, измененное в общей книге вручную, сохраняется.
+            var standard = summary ? cs.LoadsAxisMaxSummary : report.Project.LoadsAxisMax ?? cs.LoadsAxisMaxProject;
+            var max = _axisOverrides.TryGetValue(page.Key, out var manual) ? manual : standard;
+            ws.Cell(page.AxisRow, SetLabel).Value = "Верх шкалы загрузок (0 — автоматически)";
+            ws.Cell(page.AxisRow, SetValue).Value = max;
+            ws.Cell(page.AxisRow, SetDefault).Value = standard;
+            ws.Cell(page.AxisRow, SetDefault).Style.Font.FontColor = XLColor.Gray;
+            ws.Cell(page.AxisRow, SetDefault + 1).Value = "← по умолчанию";
+            ws.Cell(page.AxisRow, SetDefault + 1).Style.Font.FontColor = XLColor.Gray;
+            ws.Range(page.StartRow, SetValue, summary ? page.EndRow : page.ExpertiseRow, SetValue).Style.Fill.BackgroundColor = XlStyle.ConverterFill;
+            ws.Cell(page.AxisRow, SetValue).Style.Fill.BackgroundColor = XlStyle.ConverterFill;
+
+            // Строки «Свода» выбранного периода: первая и количество (для именованных диапазонов рядов).
+            string Clamp(string date) => $"MIN(MAX(INT({date}),{SvodLayout.SheetName}!$B${first}),{SvodLayout.SheetName}!$B${last})";
+            ws.Cell(page.RowsRow, SetLabel).Value = "Строки «Свода»: первая, количество";
+            ws.Cell(page.RowsRow, SetValue).FormulaA1 = $"IFERROR(MATCH({Clamp(start)},{dates},0),1)+{first - 1}";
+            ws.Cell(page.RowsRow, SetDefault).FormulaA1 = $"MAX(1,IFERROR(MATCH({Clamp(end)},{dates},0),1)+{first - 1}-${C(SetValue)}${page.RowsRow}+1)";
+            ws.Range(page.RowsRow, SetLabel, page.RowsRow, SetDefault).Style.Font.FontColor = XLColor.Gray;
+            var rowsFirst = $"{XlStyle.Q(SummaryWorkbook.ChartsSheet)}!${C(SetValue)}${page.RowsRow}";
+            var rowsCount = $"{XlStyle.Q(SummaryWorkbook.ChartsSheet)}!${C(SetDefault)}${page.RowsRow}";
+            string Range(string suffix, int column)
+            {
+                ws.DefinedNames.Add(page.Name(suffix), $"OFFSET({SvodLayout.SheetName}!${C(column)}$1,{rowsFirst}-1,0,{rowsCount},1)");
+                return $"{SummaryWorkbook.ChartsSheet}!{page.Name(suffix)}";
+            }
+
+            // Заголовки: у сводной — этапы, по которым есть данные за выбранный период («3-4,9»).
+            var names = new Dictionary<string, string> { ["number"] = report.Number };
+            string remarksTitle, loadsTitle;
+            string? remarksFormula = null, loadsFormula = null;
+            if (summary)
+            {
+                var list = StageListFormula(page, start, end, last, out var defaultList);
+                names["name"] = Formats.ApplyTemplate(cs.SummaryName, values: new Dictionary<string, string> { ["projects"] = defaultList });
+                remarksTitle = Formats.ApplyTemplate(cs.RemarksTitle, values: names);
+                loadsTitle = Formats.ApplyTemplate(cs.LoadsTitle, values: names);
+                remarksFormula = TemplateFormula(cs.RemarksTitle, cs.SummaryName, report.Number, list);
+                loadsFormula = TemplateFormula(cs.LoadsTitle, cs.SummaryName, report.Number, list);
+            }
+            else
+            {
+                names["name"] = report.Name;
+                remarksTitle = Formats.ApplyTemplate(cs.RemarksTitle, values: names);
+                loadsTitle = Formats.ApplyTemplate(cs.LoadsTitle, values: names);
+            }
+
+            ws.Cell(page.TitleRow, SetLabel).Value = "Заголовок диаграммы";
+            if (remarksFormula is not null)
+                ws.Cell(page.TitleRow, SetValue).FormulaA1 = remarksFormula;
+            else
+                ws.Cell(page.TitleRow, SetValue).Value = remarksTitle;
 
             ws.Cell(top, 2).Value = "По состоянию на";
-            ws.Cell(top, 4).FormulaA1 = $"{XlStyle.Q(_dailySheet)}!$AE$4";
+            ws.Cell(top, 4).FormulaA1 = asOf;
             ws.Cell(top, 4).Style.NumberFormat.Format = XlStyle.DateFormat;
             ws.Cell(top, 4).Style.Font.Bold = true;
+
+            // Подписи оси дат и значения выбранного по умолчанию периода — для просмотра без пересчета (кэш диаграммы).
+            var days = report.Daily;
+            var labels = days.Select(d => SvodLabel(d.Date)).ToList();
+            List<double?> Values(Func<DailyPoint, double?> f) => days.Select(f).ToList();
 
             // Устранение замечаний: столбцы с накоплением + линии + линии тренда.
             var remarksSeries = new List<ChartSeriesRef>
             {
-                new("Устраняется", SvodLayout.Ref(block.Fixing, 1), SvodLayout.Ref(block.Fixing, r1, r2), "FF9999", false),
-                new("Рассматривается", SvodLayout.Ref(block.Review, 1), SvodLayout.Ref(block.Review, r1, r2), "0070C0", false),
-                new("Устранено за сутки", SvodLayout.Ref(block.FixedPerDay, 1), SvodLayout.Ref(block.FixedPerDay, r1, r2), "92D050", false),
-                new("Всего", SvodLayout.Ref(block.Total, 1), SvodLayout.Ref(block.Total, r1, r2), "806000", true, cs.TrendLine ? "5B9BD5" : null),
-                new("Устранено", SvodLayout.Ref(block.Fixed, 1), SvodLayout.Ref(block.Fixed, r1, r2), "00B050", true, cs.TrendLine ? "ED7D31" : null, LabelsBelow: true),
+                new("Устраняется", SvodLayout.Ref(block.Fixing, 1), Range("s0", block.Fixing), "FF9999", false) { Cache = Values(d => d.Remarks?.Fixing) },
+                new("Рассматривается", SvodLayout.Ref(block.Review, 1), Range("s1", block.Review), "0070C0", false) { Cache = Values(d => d.Remarks?.Review) },
+                new("Устранено за сутки", SvodLayout.Ref(block.FixedPerDay, 1), Range("s2", block.FixedPerDay), "92D050", false) { Cache = Values(d => d.FixedPerDay) },
+                new("Всего", SvodLayout.Ref(block.Total, 1), Range("s3", block.Total), "806000", true, cs.TrendLine ? "5B9BD5" : null) { Cache = Values(d => d.Remarks?.Total) },
+                new("Устранено", SvodLayout.Ref(block.Fixed, 1), Range("s4", block.Fixed), "00B050", true, cs.TrendLine ? "ED7D31" : null, LabelsBelow: true) { Cache = Values(d => d.Remarks?.Fixed) },
             };
-            var first = report.Daily[0].Date;
-            var count = r2 - r1 + 1;
-            int? marker = !summary && report.ExpertiseEnd is { } e && e.Date >= first && (e.Date - first).Days < count
-                ? (e.Date - first).Days
-                : null;
-            placements.Add(new ChartPlacement(ChartKind.Remarks, Formats.ApplyTemplate(cs.RemarksTitle, values: names),
-                top, top + 29, 0, 24, cats, remarksSeries)
+            var categories = Range("cat", SvodLayout.LabelColumn);
+            int? marker = !summary && report.ExpertiseEnd is { } ee && ee.Date >= from && ee.Date <= to ? (ee.Date - from).Days : null;
+            placements.Add(new ChartPlacement(ChartKind.Remarks, remarksTitle, top, top + 29, 0, 24, categories, remarksSeries)
             {
                 Summary = summary,
-                CategoryCount = count,
+                CategoryCount = days.Count,
+                CategoryCache = labels,
+                TitleRef = $"{SummaryWorkbook.ChartsSheet}!${C(SetValue)}${page.TitleRow}",
+                MarkerRef = summary ? null : Range("end", block.Marker),
                 MarkerIndex = marker,
             });
 
             // Строка между диаграммами: Всего загружено | заголовок | окончание экспертизы | осталось дней.
             var info = top + 30;
             ws.Cell(info, 7).Value = "Всего:";
-            ws.Cell(info, 8).FormulaA1 = $"SUM({SvodLayout.Ref(block.LoadTotal, r1, reportRow)})";
+            ws.Cell(info, 8).FormulaA1 = $"SUMIFS({Svod(block.LoadTotal)},{dates},\">=\"&{start},{dates},\"<=\"&MIN({end},{asOf}))";
             ws.Cell(info, 8).Style.NumberFormat.Format = XlStyle.IntFormat;
-            ws.Range(info, 9, info, 15).Merge().Value = Formats.ApplyTemplate(cs.LoadsTitle, values: names);
-            ws.Range(info, 9, info, 15).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
-            if (report.ExpertiseEnd is { } end && !summary)
+            var loadsCell = ws.Range(info, 9, info, 15).Merge();
+            if (loadsFormula is not null)
+                ws.Cell(info, 9).FormulaA1 = loadsFormula;
+            else
+                ws.Cell(info, 9).Value = loadsTitle;
+            loadsCell.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+            if (!summary)
             {
-                ws.Cell(info, 16).Value = "Дата окончания экспертизы:";
-                ws.Cell(info, 20).Value = end;
+                ws.Cell(info, 16).FormulaA1 = $"IF(ISNUMBER({expertise}),\"Дата окончания экспертизы:\",\"\")";
+                ws.Cell(info, 20).FormulaA1 = $"IF(ISNUMBER({expertise}),{expertise},\"\")";
                 ws.Cell(info, 20).Style.NumberFormat.Format = XlStyle.DateFormat;
-                ws.Cell(info, 22).Value = "Осталось дней:";
-                ws.Cell(info, 24).FormulaA1 = $"T{info}-{XlStyle.Q(_dailySheet)}!$AE$4";
+                ws.Cell(info, 22).FormulaA1 = $"IF(ISNUMBER({expertise}),\"Осталось дней:\",\"\")";
+                ws.Cell(info, 24).FormulaA1 = $"IF(ISNUMBER({expertise}),{expertise}-{asOf},\"\")";
                 ws.Cell(info, 24).Style.NumberFormat.Format = "0";
                 ws.Range(info, 16, info, 20).Style.Font.FontColor = XLColor.FromHtml("#0070C0");
             }
@@ -1489,20 +1845,19 @@ internal sealed class SummaryWorkbookBuilder
 
             var loadsSeries = new List<ChartSeriesRef>
             {
-                new("Загружено документов", SvodLayout.Ref(block.LoadTotal, 1), SvodLayout.Ref(block.LoadTotal, r1, r2), "5B9BD5", false),
+                new("Загружено документов", SvodLayout.Ref(block.LoadTotal, 1), Range("loads", block.LoadTotal), "5B9BD5", false) { Cache = Values(d => d.Loaded) },
             };
-            // Верх шкалы загрузок: для сводной и для этапов — общие, у этапа может быть свой (0 — автоматически).
-            var max = summary ? cs.LoadsAxisMaxSummary : report.Project.LoadsAxisMax ?? cs.LoadsAxisMaxProject;
-            placements.Add(new ChartPlacement(ChartKind.Loads, "", top + 30, top + 50, 0, 24, cats, loadsSeries)
+            placements.Add(new ChartPlacement(ChartKind.Loads, "", top + 30, top + 50, 0, 24, categories, loadsSeries)
             {
                 Summary = summary,
-                CategoryCount = count,
+                CategoryCount = days.Count,
+                CategoryCache = labels,
                 AxisMax = max > 0 ? max : null,
             });
-            page++;
         }
 
-        var lastRow = Math.Max(1, page * PageRows);
+        var pages = _pages.Count;
+        var lastRow = Math.Max(1, pages * PageRows);
         var ps = ws.PageSetup;
         ps.PrintAreas.Clear();
         ps.PrintAreas.Add(1, 1, lastRow, 24);
@@ -1517,12 +1872,84 @@ internal sealed class SummaryWorkbookBuilder
         ps.Margins.Bottom = 0.39;
         ps.Margins.Header = 0.31;
         ps.Margins.Footer = 0.31;
-        for (var i = 1; i < page; i++)
+        for (var i = 1; i < pages; i++)
             ps.AddHorizontalPageBreak(i * PageRows);
         ws.SheetView.View = XLSheetViewOptions.PageBreakPreview;
         ws.SheetView.ZoomScale = 70;
         ws.SheetView.ZoomScaleSheetLayoutView = 70;
-        return page;
+        return pages;
+    }
+
+    /// <summary>Подпись дня на оси диаграмм — как в столбце D «Свода»: «15.10.2026 Чт».</summary>
+    private static string SvodLabel(DateTime date)
+    {
+        var weekday = date.ToString("ddd", Formats.Ru);
+        return date.ToString("dd.MM.yyyy", Formats.Ru) + " " + char.ToUpper(weekday[0]) + weekday[1..];
+    }
+
+    /// <summary>
+    /// Формула списка этапов сводной диаграммы, по которым в «Своде» есть данные за выбранный период: «1-5», «3-4,9».
+    /// Признак «есть данные» — по этапу в строке <see cref="ChartPage.FlagsRow"/> (служебные ячейки).
+    /// </summary>
+    private string StageListFormula(ChartPage page, string start, string end, int lastRow, out string defaultList)
+    {
+        var sheet = _chartsSheet!;
+        var first = SvodLayout.FirstRow;
+        var stages = _loaded.Select((p, i) => (Project: p, Block: SvodLayout.Project(i)))
+            .OrderBy(x => int.TryParse(x.Project.Number, out var n) ? n : int.MaxValue)
+            .ThenBy(x => x.Project.Number, StringComparer.Ordinal)
+            .ToList();
+        sheet.Cell(page.FlagsRow, SetLabel).Value = "Этапы с данными за период";
+        sheet.Cell(page.FlagsRow, SetLabel).Style.Font.FontColor = XLColor.Gray;
+        var flags = new List<string>();
+        for (var i = 0; i < stages.Count; i++)
+        {
+            var col = SetValue + i;
+            string Rng(int c) => $"{SvodLayout.SheetName}!${C(c)}${first}:${C(c)}${lastRow}";
+            var cell = sheet.Cell(page.FlagsRow, col);
+            cell.FormulaA1 = $"COUNTIFS({Rng(SvodLayout.DateColumn)},\">=\"&{start},{Rng(SvodLayout.DateColumn)},\"<=\"&{end},{Rng(stages[i].Block.Total)},\">=0\")>0";
+            cell.Style.Font.FontColor = XLColor.Gray;
+            sheet.Cell(page.FlagsRow - 1, col).Style.Font.FontColor = XLColor.Gray;
+            flags.Add($"${C(col)}${page.FlagsRow}");
+        }
+
+        // По умолчанию — этапы с данными за период диаграммы (для кэша заголовка).
+        var from = page.Report.Daily[0].Date;
+        var to = page.Report.Daily[^1].Date;
+        defaultList = Formats.CompressNumbers(stages
+                .Where(x => x.Project.Screen!.Remarks.Any(r => r.Timestamp.Date >= from && r.Timestamp.Date <= to))
+                .Select(x => x.Project.Number))
+            .Replace(", ", ",");
+
+        // Части списка: номер начинает диапазон, если предыдущий (на 1 меньше) не входит; заканчивает — если не входит следующий.
+        var parts = new List<string>();
+        for (var i = 0; i < stages.Count; i++)
+        {
+            var number = stages[i].Project.Number;
+            var isInt = int.TryParse(number, out var n);
+            var prevAdjacent = isInt && i > 0 && int.TryParse(stages[i - 1].Project.Number, out var pn) && pn == n - 1;
+            var nextAdjacent = isInt && i + 1 < stages.Count && int.TryParse(stages[i + 1].Project.Number, out var nn) && nn == n + 1;
+            var startsRange = prevAdjacent ? $"NOT({flags[i - 1]})" : "TRUE";
+            var endsRange = nextAdjacent ? $"NOT({flags[i + 1]})" : "TRUE";
+            parts.Add($"IF({flags[i]},IF({startsRange},{Quote("," + number)},\"\")&IF(AND({endsRange},NOT({startsRange})),{Quote("-" + number)},\"\"),\"\")");
+        }
+
+        return parts.Count == 0 ? "\"\"" : $"MID({string.Join("&", parts)},2,200)";
+    }
+
+    /// <summary>
+    /// Формула заголовка по шаблону («Устранение замечаний ГГЭ - {name} ВСМ-1», {name} = «{projects} этапы»)
+    /// со списком этапов из формулы <paramref name="list"/>.
+    /// </summary>
+    private static string TemplateFormula(string template, string nameTemplate, string number, string list)
+    {
+        const string token = "\u0001";
+        var name = Formats.ApplyTemplate(nameTemplate, values: new Dictionary<string, string> { ["projects"] = token });
+        var text = Formats.ApplyTemplate(template, values: new Dictionary<string, string> { ["name"] = name, ["number"] = number });
+        var pieces = text.Split(token);
+        if (pieces.Length == 1)
+            return Quote(text);
+        return string.Join($"&{list}&", pieces.Select(Quote));
     }
 
     private string ShortList() => Formats.CompressNumbers(_loaded.Select(p => p.Number)).Replace(", ", ",");

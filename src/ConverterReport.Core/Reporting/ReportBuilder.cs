@@ -15,6 +15,12 @@ public static class ReportBuilder
     /// <summary>Насколько далеко (в днях) ось диаграммы может уходить вперед до окончания экспертизы.</summary>
     private const int MaxFutureDays = 180;
 
+    /// <summary>
+    /// На отчетную дату диаграмм, если в этот день строк еще нет, берется последняя строка экрана — если она не старше
+    /// стольких дней (иначе этап закончился и на эту дату в «Своде» и сводной диаграмме его нет).
+    /// </summary>
+    internal const int StaleDays = 7;
+
     public static ReportModel Build(
         ReportConfig config,
         IReadOnlyList<ProjectInput> inputs,
@@ -32,8 +38,22 @@ public static class ReportBuilder
         };
 
         var globalChartStart = Formats.ParseDate(config.Charts.StartDate)?.Date;
+        var built = new Dictionary<ProjectInput, ProjectReport>();
+        foreach (var input in inputs.Where(i => !i.Project.IsArchive))
+            built[input] = BuildProject(model, input, globalChartStart);
+
+        // Архивные этапы (без экрана) — на диаграммах за тот же период, что и этапы с экраном (не растягивают его в прошлое);
+        // предупреждения по ним не выводятся: их данные старые по определению.
+        var liveStart = built.Values.Where(p => p.Daily.Count > 0).Select(p => (DateTime?)p.Daily[0].Date).Min();
+        foreach (var input in inputs.Where(i => i.Project.IsArchive))
+        {
+            var report = BuildProject(model, input, globalChartStart ?? liveStart);
+            report.Warnings.RemoveAll(w => input.Error is null || w != input.Error);
+            built[input] = report;
+        }
+
         foreach (var input in inputs)
-            model.Projects.Add(BuildProject(model, input, globalChartStart));
+            model.Projects.Add(built[input]);
 
         if (model.Projects.Count > 1)
             model.Summary = BuildSummary(model);
@@ -137,7 +157,8 @@ public static class ReportBuilder
             {
                 // На отчетную дату, если в этот день строк еще нет, — последняя заполненная строка (как в таблице отчета),
                 // иначе сводная диаграмма «проваливается» в последний день.
-                if (!lastByDay.TryGetValue(d, out var snap) && d == reportDate && snapshots.Count > 0)
+                if (!lastByDay.TryGetValue(d, out var snap) && d == reportDate && snapshots.Count > 0
+                    && snapshots[^1].Timestamp >= reportDate.AddDays(-StaleDays))
                     snap = snapshots[^1];
                 if (snap is not null)
                 {

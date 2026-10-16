@@ -11,6 +11,9 @@ internal readonly record struct SvodBlock(int Label, int Remarks, int Loads)
     public int Review => Remarks + 3;
     public int FixedPerDay => Remarks + 4;
 
+    /// <summary>Окончание экспертизы: 1 на эту дату (вертикальная линия на диаграмме), иначе #Н/Д.</summary>
+    public int Marker => Remarks + 5;
+
     /// <summary>ИИ, ПД, СМ, ВОР, КАЦ, Иные, Всего, Ответы, Аннулировано, Ошибки.</summary>
     public int Load(int index) => Loads + index;
 
@@ -69,8 +72,12 @@ internal enum ChartKind
     Loads,
 }
 
-/// <summary>Ряд диаграммы со ссылками на лист «Свод».</summary>
-internal sealed record ChartSeriesRef(string Name, string NameRef, string ValuesRef, string Color, bool IsLine, string? TrendColor = null, bool LabelsBelow = false);
+/// <summary>Ряд диаграммы: имя — ссылка на заголовок «Свода», значения — именованный диапазон периода.</summary>
+internal sealed record ChartSeriesRef(string Name, string NameRef, string ValuesRef, string Color, bool IsLine, string? TrendColor = null, bool LabelsBelow = false)
+{
+    /// <summary>Значения периода по умолчанию — кэш диаграммы (видно до пересчета книги).</summary>
+    public IReadOnlyList<double?>? Cache { get; init; }
+}
 
 /// <summary>Диаграмма на листе «Диаграммы»: положение (строки/колонки, с 0) и ряды.</summary>
 internal sealed record ChartPlacement(
@@ -92,8 +99,17 @@ internal sealed record ChartPlacement(
     /// <summary>Верх шкалы (null — автоматически).</summary>
     public double? AxisMax { get; init; }
 
-    /// <summary>Номер точки с датой окончания экспертизы — вертикальная пунктирная линия.</summary>
+    /// <summary>Номер точки с датой окончания экспертизы (для кэша).</summary>
     public int? MarkerIndex { get; init; }
+
+    /// <summary>Ряд «окончание экспертизы» (1 на дату окончания) — вертикальная пунктирная линия; null — линии нет.</summary>
+    public string? MarkerRef { get; init; }
+
+    /// <summary>Заголовок — ссылка на ячейку (меняется вместе с периодом); <see cref="Title"/> — его кэш.</summary>
+    public string? TitleRef { get; init; }
+
+    /// <summary>Подписи оси дат периода по умолчанию (кэш).</summary>
+    public IReadOnlyList<string>? CategoryCache { get; init; }
 }
 
 /// <summary>Результат построения сводной книги.</summary>

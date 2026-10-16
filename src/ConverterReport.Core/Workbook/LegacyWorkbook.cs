@@ -1,7 +1,7 @@
 using ClosedXML.Excel;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
-using ConverterReport.Core.Configuration;
+using ConverterReport.Core.Archive;
 
 namespace ConverterReport.Core.Workbook;
 
@@ -65,32 +65,32 @@ public static class LegacyWorkbook
     }
 
     /// <summary>
-    /// Сроки этапов из раздела «4. Сроки» листа: номер этапа → стадия → [начало, окончание] или [текст].
+    /// Сроки этапов из раздела «4. Сроки» листа дня: номер этапа → стадия → [начало, окончание] или [текст].
     /// </summary>
-    public static Dictionary<string, Dictionary<string, List<string>>> ReadDeadlines(IXLWorksheet ws)
+    internal static Dictionary<string, Dictionary<string, List<string>>> ReadDeadlines(XlsxSheet ws)
     {
         var result = new Dictionary<string, Dictionary<string, List<string>>>(StringComparer.OrdinalIgnoreCase);
-        var last = ws.LastRowUsed()?.RowNumber() ?? 0;
-        var title = Enumerable.Range(1, last).FirstOrDefault(r => Text(ws.Cell(r, 1)).StartsWith("4. Сроки", StringComparison.OrdinalIgnoreCase));
+        var last = ws.Values.LastRow;
+        var title = Enumerable.Range(1, last).FirstOrDefault(r => ws.Text(r, 1).StartsWith("4. Сроки", StringComparison.OrdinalIgnoreCase));
         if (title == 0)
             return result;
-        var header = Enumerable.Range(title + 1, 4).FirstOrDefault(r => Text(ws.Cell(r, 1)).Equals("Этап", StringComparison.OrdinalIgnoreCase));
+        var header = Enumerable.Range(title + 1, 4).FirstOrDefault(r => ws.Text(r, 1).Equals("Этап", StringComparison.OrdinalIgnoreCase));
         if (header == 0)
             return result;
 
         // Стадии — объединенные ячейки строки заголовка; «Начало»/«Окончание» — в следующей строке.
-        var lastColumn = ws.Row(header).LastCellUsed()?.Address.ColumnNumber ?? 0;
+        var lastColumn = Enumerable.Range(1, ws.Values.LastColumn).LastOrDefault(c => ws.Text(header, c).Length > 0);
         var stages = new List<(string Name, int Start, int End)>();
         for (var c = 3; c <= lastColumn; c++)
         {
-            var name = Text(ws.Cell(header, c));
+            var name = ws.Text(header, c);
             if (name.Length == 0)
                 continue;
-            var span = ws.Cell(header, c).MergedRange()?.RangeAddress.LastAddress.ColumnNumber ?? c;
+            var span = ws.MergeEnd(header, c);
             int start = 0, end = 0;
             for (var k = c; k <= span; k++)
             {
-                var label = Text(ws.Cell(header + 1, k));
+                var label = ws.Text(header + 1, k);
                 if (start == 0 && label.StartsWith("Начало", StringComparison.OrdinalIgnoreCase))
                     start = k;
                 else if (end == 0 && label.StartsWith("Окончание", StringComparison.OrdinalIgnoreCase))
@@ -104,14 +104,14 @@ public static class LegacyWorkbook
 
         for (var r = header + 2; r <= last; r++)
         {
-            var number = Text(ws.Cell(r, 1));
+            var number = ws.Text(r, 1);
             if (number.Length == 0)
                 break;
             var deadlines = new Dictionary<string, List<string>>();
             foreach (var (name, start, end) in stages)
             {
-                var a = Value(ws.Cell(r, start));
-                var b = end > 0 ? Value(ws.Cell(r, end)) : "";
+                var a = Value(ws, r, start);
+                var b = end > 0 ? Value(ws, r, end) : "";
                 if (a.Length == 0 && b.Length == 0)
                     continue;
                 deadlines[name] = b.Length == 0 && Formats.ParseDate(a) is null ? new List<string> { a } : new List<string> { a, b };
@@ -124,11 +124,12 @@ public static class LegacyWorkbook
         return result;
     }
 
-    /// <summary>Последний лист дня старой книги (по отчетной дате в AE4, иначе по имени).</summary>
-    public static IXLWorksheet? LastDailySheet(XLWorkbook legacy, DateTime reportDate) =>
-        legacy.Worksheets.Where(w => SummaryWorkbookBuilder.IsDailySheet(w.Name))
-            .OrderBy(w => SummaryWorkbookBuilder.DailyDate(w, reportDate))
-            .LastOrDefault();
+    private static string Value(XlsxSheet ws, int row, int column) => ws.Values.Get(row, column) switch
+    {
+        DateTime d => d.ToString("dd.MM.yyyy", Formats.Ru),
+        double n when n is > 30000 and < 80000 => DateTime.FromOADate(n).ToString("dd.MM.yyyy", Formats.Ru),
+        _ => ws.Text(row, column),
+    };
 
     /// <summary>
     /// Значение формулы, сохраненное Excel. Если его нет (книга сохранена не Excel) — вычисленное ClosedXML,
@@ -147,18 +148,6 @@ public static class LegacyWorkbook
         {
             return Blank.Value;
         }
-    }
-
-    private static string Text(IXLCell cell) => cell.GetFormattedString().Trim();
-
-    private static string Value(IXLCell cell)
-    {
-        var value = cell.HasFormula ? Computed(cell) : cell.Value;
-        if (value.IsDateTime)
-            return value.GetDateTime().ToString("dd.MM.yyyy", Formats.Ru);
-        if (value.IsNumber && value.GetNumber() is > 30000 and < 80000 and var serial)
-            return DateTime.FromOADate(serial).ToString("dd.MM.yyyy", Formats.Ru);
-        return value.ToString(Formats.Ru).Trim();
     }
 
     private static FileStream OpenRead(string path) =>

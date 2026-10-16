@@ -137,8 +137,10 @@ public sealed class OutputSettingsTests : IDisposable
         using var wb = new XLWorkbook(result.Workbook!);
         var daily = wb.Worksheet("15.10");
         var forDay = expected is 20 or 9;
-        Assert.Equal(forDay ? d15 : d14, daily.Cell(5, 31).GetDateTime());
-        Assert.Contains(forDay ? ">=$AE$5+$AF$5" : ">$AE$5+$AF$5", daily.Cell(9, 28).FormulaA1);
+        // Начало выборки (AE5) и признак «за день» (AG5) — формулы от дат отчета AE3:AF4.
+        Assert.Equal(forDay ? 1.0 : 0.0, daily.Cell(5, 33).Value.GetNumber());
+        Assert.Equal((forDay ? d15 : d14).ToOADate(), daily.Cell(5, 31).Value.GetNumber());
+        Assert.Contains("$AG$5", daily.Cell(9, 28).FormulaA1);
         Assert.Equal(expected, daily.Cell(10, 24).Value.GetNumber()); // «Всего:» раздела 1
 
         // Вечером сумма раздела 1 совпадает с загрузками дня на диаграмме («Свод»).
@@ -224,7 +226,7 @@ public sealed class OutputSettingsTests : IDisposable
             p.Deadlines.Clear();
         config.Report.WorkbookMode = WorkbookMode.Append;
         config.Report.ImportLegacyDays = true;
-        config.Report.LegacyWorkbook = old;
+        config.Report.ArchiveWorkbooks.Add(new ArchiveSource { Path = old });
         var result = Run(config, 15, 8);
 
         Assert.Equal(new[] { "01.10.2026", "30.10.2026" }, result.FilledDeadlines["4"]["Экспертиза"]);

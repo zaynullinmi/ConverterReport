@@ -151,15 +151,21 @@ internal static class Program
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern uint GetConsoleProcessList(uint[] processList, uint processCount);
 
-    /// <summary>Сроки, взятые из старой книги, сохраняются в настройки — в следующий раз книга для этого не нужна.</summary>
+    /// <summary>
+    /// Сроки, взятые из прошлой версии отчета, и добавленные архивные этапы сохраняются в настройки —
+    /// в следующий раз книга для этого не нужна.
+    /// </summary>
     private static void SaveFilledDeadlines(ReportConfig config, string configPath, RunResult result)
     {
-        if (result.FilledDeadlines.Count == 0)
+        if (!result.ConfigChanged)
             return;
         try
         {
             ConfigLoader.Save(config, configPath);
-            Info($"Сроки этапов {string.Join(", ", result.FilledDeadlines.Keys)} сохранены в настройки.");
+            if (result.FilledDeadlines.Count > 0)
+                Info($"Сроки этапов {string.Join(", ", result.FilledDeadlines.Keys)} сохранены в настройки.");
+            if (result.AddedStages.Count > 0)
+                Info($"Архивные этапы {string.Join(", ", result.AddedStages.Select(p => p.Number))} добавлены в настройки.");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

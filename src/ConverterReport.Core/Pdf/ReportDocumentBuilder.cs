@@ -154,10 +154,10 @@ internal sealed class ReportDocumentBuilder
         {
             if (each && p.PeriodLoads.Count > 0)
             {
+                // Каждая загрузка отдельной строкой, номера — по порядку у этапа (1, 2, 3…), как в книге.
+                var k = 1;
                 foreach (var load in p.PeriodLoads)
-                    LoadRow(table, p.Number, load.Number ?? "", load.Start ?? load.End, load.End, load.Counts, false);
-                if (p.PeriodLoads.Count > 1)
-                    LoadRow(table, p.Number, "Итого", p.PeriodLoadsStart, p.PeriodLoadsEnd, p.PeriodLoadsSum, true);
+                    LoadRow(table, p.Number, (k++).ToString(Formats.Ru), load.Start ?? load.End, load.End, load.Counts, false);
             }
             else
             {
@@ -338,10 +338,12 @@ internal sealed class ReportDocumentBuilder
         cell.MergeRight = columns - 2;
     }
 
-    private string StageLabel(ProjectReport p) => p.IsStale(_m.ReportTime) ? p.Number + "*" : p.Number;
+    private string StageLabel(ProjectReport p) => _s.MarkStaleData && p.IsStale(_m.ReportTime) ? p.Number + "*" : p.Number;
 
     private void AddStaleFootnotes(Section section)
     {
+        if (!_s.MarkStaleData)
+            return;
         foreach (var p in _m.ShownProjects.Where(p => p.IsStale(_m.ReportTime)))
             Footnote(section, $"* Этап {p.Number}: данные экрана на {Formats.DateTimeText(p.Current!.Timestamp)} (на отчетное время строка не заполнена).");
     }

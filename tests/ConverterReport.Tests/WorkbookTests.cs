@@ -43,7 +43,7 @@ public sealed class WorkbookTests : IDisposable
         Assert.Equal("AE4+AF4", daily.Cell("A4").FormulaA1);
         Assert.Equal("AB9", daily.Cell("C9").FormulaA1);
         Assert.Contains("SUMPRODUCT", daily.Cell("AB9").FormulaA1);
-        Assert.Contains(daily.CellsUsed(), c => c.HasFormula && c.FormulaA1.Contains("'З.3'!E"));
+        Assert.Contains(daily.CellsUsed(), c => c.HasFormula && c.FormulaA1.Contains("'З.3'!$E$"));
 
         // Отчет_дет ссылается на «Отчет», как в книге.
         Assert.StartsWith("Отчет!", wb.Worksheet("Отчет_дет").Cell(9, 2).FormulaA1);

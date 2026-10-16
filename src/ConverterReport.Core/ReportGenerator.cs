@@ -1,4 +1,5 @@
 using System.Text;
+using ConverterReport.Core.Archive;
 using ConverterReport.Core.Configuration;
 using ConverterReport.Core.Export;
 using ConverterReport.Core.Pdf;
@@ -48,6 +49,12 @@ public sealed class RunResult
 
     /// <summary>Сроки этапов, взятые из старой книги (в настройках их не было) — номер этапа → стадия → даты.</summary>
     public Dictionary<string, Dictionary<string, List<string>>> FilledDeadlines { get; } = new();
+
+    /// <summary>Архивные этапы, добавленные в настройки (выбраны в прошлых версиях отчета, в списке этапов их не было).</summary>
+    public List<ProjectConfig> AddedStages { get; } = new();
+
+    /// <summary>Настройки изменились (сроки или этапы из архива) — их стоит сохранить.</summary>
+    public bool ConfigChanged => FilledDeadlines.Count > 0 || AddedStages.Count > 0;
 }
 
 public sealed class ConfigurationException : Exception
@@ -87,16 +94,43 @@ public sealed class ReportGenerator
         _info($"Отчет на {Formats.DateTimeText(reportTime)}, период с {Formats.DateTimeText(periodStart)}.");
 
         var inputs = ReadScreens(config);
+        var early = new List<string>();
+        var names = new Dictionary<string, string>
+        {
+            ["projects"] = Formats.CompressNumbers(config.EnabledProjects.Where(p => !p.IsArchive).Select(p => p.Number)),
+            ["version"] = config.Report.Version,
+        };
+        names["projectsshort"] = names["projects"].Replace(", ", ",");
+        var folder = config.ResolvePath(options.OutputFolder ?? config.Report.OutputFolder);
+        Directory.CreateDirectory(folder);
+
+        // Общая книга открывается заранее: в ее листах Д.N/З.N — накопленные данные этапов (прошлые циклы, архивные этапы).
+        MasterBook? master = null;
+        if (config.Report.WorkbookMode == WorkbookMode.Append)
+        {
+            var masterPath = MasterPath(config.Report.MasterWorkbook, folder, reportTime, names);
+            try
+            {
+                master = MasterBook.Open(masterPath);
+            }
+            catch (MasterWorkbookException ex)
+            {
+                early.Add(ex.Message + " Сформирована отдельная книга.");
+            }
+        }
+
+        using var masterScope = master;
+        var archives = ReadArchives(config, early);
+        var addedStages = AddArchiveStages(config, archives);
+        inputs = MergeStages(config, inputs, master, archives);
         if (inputs.All(i => i.Screen is null))
             throw new InvalidOperationException("Не удалось прочитать ни один файл экрана — отчет не сформирован.");
 
-        var early = new List<string>();
-        using var legacy = OpenLegacy(config, early);
-        var filled = FillDeadlines(config, legacy, reportTime.Date, early);
-
+        var filled = FillDeadlines(config, archives, reportTime.Date, early);
         var notes = ReadNotes(config).Concat(options.ExtraNotes).ToList();
         var model = ReportBuilder.Build(config, inputs, reportTime, periodStart, notes);
         var result = new RunResult { Model = model };
+        result.AddedStages.AddRange(addedStages);
         foreach (var (number, deadlines) in filled)
             result.FilledDeadlines[number] = deadlines;
         foreach (var w in early.Concat(model.AllWarnings))
@@ -105,28 +139,19 @@ public sealed class ReportGenerator
             _warn(w);
         }
 
-        var folder = config.ResolvePath(options.OutputFolder ?? config.Report.OutputFolder);
-        Directory.CreateDirectory(folder);
-        var names = new Dictionary<string, string>
-        {
-            ["projects"] = model.ProjectsList,
-            ["projectsshort"] = model.ProjectsList.Replace(", ", ","),
-            ["version"] = config.Report.Version,
-        };
         string FileFor(string template, string extension) =>
             Writable(folder, Formats.SafeFileName(Formats.ApplyTemplate(template, reportTime, names)) + extension);
 
         // 1. Сводная книга Excel: отдельная на отчет или лист дня в общей книге.
         SummaryWorkbook? workbook = null;
-        if (config.Report.WorkbookMode == WorkbookMode.Append)
+        if (master is not null)
         {
-            var master = MasterPath(config.Report.MasterWorkbook, folder, reportTime, names);
             try
             {
-                workbook = SummaryWorkbookWriter.Append(model, master, config.Report.VisibleDailySheets, legacy);
-                _info($"Лист «{workbook.DailySheet}» записан в общую книгу: {master}");
+                workbook = SummaryWorkbookWriter.Append(model, master, config.Report.VisibleDailySheets, archives.Select(a => a.Book).ToList());
+                _info($"Лист «{workbook.DailySheet}» записан в общую книгу: {master.Path}");
                 if (workbook.ImportedSheets > 0)
-                    _info($"Из старой книги перенесено листов прошлых дней: {workbook.ImportedSheets}.");
+                    _info($"Из прошлых версий отчета перенесено листов прошлых дней: {workbook.ImportedSheets}.");
                 if (workbook.LegacyWarning is { } legacyWarning)
                 {
                     result.Warnings.Add(legacyWarning);
@@ -228,6 +253,12 @@ public sealed class ReportGenerator
         Parallel.For(0, projects.Count, new ParallelOptions { MaxDegreeOfParallelism = 4 }, i =>
         {
             var project = projects[i];
+            if (project.IsArchive)
+            {
+                inputs[i] = new ProjectInput(project, null);
+                return;
+            }
+
             var path = config.ResolvePath(project.ScreenFile);
             try
             {
@@ -256,29 +287,125 @@ public sealed class ReportGenerator
         return inputs.ToList();
     }
 
-    /// <summary>Старая книга для переноса листов прошлых дней и сроков (если включено в настройках и файл есть).</summary>
-    private LegacySource? OpenLegacy(ReportConfig config, List<string> warnings)
+    /// <summary>Прошлая версия отчета и ее настройки.</summary>
+    private sealed record Archive(ArchiveSource Source, ArchiveBook Book);
+
+    /// <summary>Прошлые версии отчета (если включено в настройках): этапы и листы дней.</summary>
+    private List<Archive> ReadArchives(ReportConfig config, List<string> warnings)
     {
-        var r = config.Report;
-        if (!r.ImportLegacyDays || string.IsNullOrWhiteSpace(r.LegacyWorkbook))
-            return null;
-        var path = config.ResolvePath(r.LegacyWorkbook);
-        if (File.Exists(path))
-            return new LegacySource(path);
-        warnings.Add($"Старая книга не найдена: {path} — листы прошлых дней не перенесены.");
-        return null;
+        var result = new List<Archive>();
+        if (!config.Report.ImportLegacyDays)
+            return result;
+        foreach (var source in config.Report.ArchiveWorkbooks.Where(a => !string.IsNullOrWhiteSpace(a.Path)))
+        {
+            var path = config.ResolvePath(source.Path);
+            if (!File.Exists(path))
+            {
+                warnings.Add($"Прошлая версия отчета не найдена: {path}.");
+                continue;
+            }
+
+            try
+            {
+                var book = ArchiveReader.Read(path, config.ScreenLayout);
+                result.Add(new Archive(source, book));
+                var stages = book.Parts.Select(p => source.StageFor(p.Key)).Where(s => s is not null).Distinct().ToList();
+                _info($"Прошлая версия отчета {Path.GetFileName(path)}: листов дней — {book.DailySheets.Count}, " +
+                      (stages.Count > 0 ? $"данные этапов {string.Join(", ", stages)}." : "данные этапов не выбраны."));
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                warnings.Add($"Не удалось прочитать прошлую версию отчета {path}: {ex.Message}");
+            }
+        }
+
+        return result;
     }
 
-    /// <summary>Сроки этапов, не заполненные в настройках, — из последнего листа дня старой книги.</summary>
-    private Dictionary<string, Dictionary<string, List<string>>> FillDeadlines(ReportConfig config, LegacySource? legacy, DateTime reportDate, List<string> warnings)
+    /// <summary>
+    /// Этапы, выбранные в прошлых версиях отчета, которых нет в списке этапов, добавляются архивными (без файла экрана):
+    /// в «Своде» и сводной диаграмме они есть, в листах отчета — нет («В отчете» выключено).
+    /// </summary>
+    private List<ProjectConfig> AddArchiveStages(ReportConfig config, List<Archive> archives)
+    {
+        var added = new List<ProjectConfig>();
+        foreach (var stage in archives.SelectMany(a => a.Book.Parts.Select(p => a.Source.StageFor(p.Key))).Where(s => s is not null).Distinct())
+        {
+            if (config.Projects.Any(p => p.Number.Trim() == stage))
+                continue;
+            var project = new ProjectConfig { Number = stage!, ScreenFile = "", Enabled = true, ShowInReport = false };
+            var index = config.Projects.FindIndex(p => CompareNumbers(p.Number, stage!) > 0);
+            config.Projects.Insert(index < 0 ? config.Projects.Count : index, project);
+            added.Add(project);
+            _info($"Этап {stage}: добавлен из прошлой версии отчета как архивный (без файла экрана).");
+        }
+
+        return added;
+    }
+
+    internal static int CompareNumbers(string a, string b) =>
+        int.TryParse(a.Trim(), out var x) && int.TryParse(b.Trim(), out var y) ? x.CompareTo(y) : string.Compare(a, b, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Данные этапов: экран + строки общей книги и прошлых версий отчета за даты раньше первой строки экрана
+    /// (у архивного этапа — только они). Если экран не прочитан, данные из общей книги не подставляются.
+    /// </summary>
+    private List<ProjectInput> MergeStages(ReportConfig config, List<ProjectInput> inputs, MasterBook? master, List<Archive> archives)
+    {
+        var merger = new StageMerger(config.ScreenLayout);
+        var enabled = config.EnabledProjects;
+        var byNumber = inputs.ToDictionary(i => i.Project);
+        var result = new List<ProjectInput>();
+        foreach (var project in enabled)
+        {
+            var input = byNumber.GetValueOrDefault(project) ?? new ProjectInput(project, null);
+            if (input.Screen is null && !project.IsArchive)
+            {
+                result.Add(input);
+                continue;
+            }
+
+            var number = project.Number.Trim();
+            var others = new List<StageSource>();
+            if (master?.Stage(number, config.ScreenLayout) is { } stored)
+                others.Add(stored);
+            foreach (var archive in archives)
+            {
+                foreach (var part in archive.Book.Parts.Where(p => archive.Source.StageFor(p.Key) == number))
+                    others.Add(new StageSource($"{Path.GetFileName(archive.Book.Path)}: {part.Sheets}", part.Data.RawRemarks, part.Data.RawDocuments));
+            }
+
+            var merged = merger.Merge(input.Screen, others, input.Screen?.FilePath ?? $"архив этапа {number}");
+            if (merged is null)
+            {
+                result.Add(new ProjectInput(project, null, "файл экрана не указан, а в общей книге и прошлых версиях отчета данных этапа нет."));
+                continue;
+            }
+
+            if (merged.AddedRemarks > 0 || merged.AddedLoads > 0)
+            {
+                _info(input.Screen is null
+                    ? $"Этап {number} (архивный): строк замечаний — {merged.AddedRemarks}, загрузок — {merged.AddedLoads}."
+                    : $"Этап {number}: до начала экрана добавлено строк из общей книги и прошлых версий отчета: замечаний — {merged.AddedRemarks}, загрузок — {merged.AddedLoads}.");
+            }
+
+            result.Add(new ProjectInput(project, merged.Data, input.Error));
+        }
+
+        return result;
+    }
+
+    /// <summary>Сроки этапов с экраном, не заполненные в настройках, — из последнего листа дня прошлой версии отчета.</summary>
+    private Dictionary<string, Dictionary<string, List<string>>> FillDeadlines(ReportConfig config, List<Archive> archives, DateTime reportDate, List<string> warnings)
     {
         var filled = new Dictionary<string, Dictionary<string, List<string>>>();
-        var empty = config.EnabledProjects.Where(p => p.Deadlines.Count == 0).ToList();
-        if (legacy is null || empty.Count == 0)
+        var empty = config.EnabledProjects.Where(p => !p.IsArchive && p.Deadlines.Count == 0).ToList();
+        var archive = archives.FirstOrDefault(a => a.Book.DailySheets.Count > 0);
+        if (archive is null || empty.Count == 0)
             return filled;
         try
         {
-            var sheet = LegacyWorkbook.LastDailySheet(legacy.Book, reportDate);
+            var sheet = ArchiveReader.ReadDailySheet(archive.Book.Path, reportDate);
             if (sheet is null)
                 return filled;
             var found = LegacyWorkbook.ReadDeadlines(sheet);
@@ -288,12 +415,12 @@ public sealed class ReportGenerator
                     continue;
                 project.Deadlines = deadlines;
                 filled[project.Number] = deadlines;
-                _info($"Этап {project.Number}: сроки взяты из старой книги (лист {sheet.Name}).");
+                _info($"Этап {project.Number}: сроки взяты из прошлой версии отчета (лист {sheet.Values.Name}).");
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            warnings.Add($"Не удалось прочитать сроки из старой книги {legacy.Path}: {ex.Message}");
+            warnings.Add($"Не удалось прочитать сроки из {archive.Book.Path}: {ex.Message}");
         }
 
         return filled;

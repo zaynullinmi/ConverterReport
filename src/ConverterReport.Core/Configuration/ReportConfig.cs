@@ -100,13 +100,17 @@ public sealed class ReportSettings
     public int VisibleDailySheets { get; set; } = 2;
 
     /// <summary>
-    /// Переносить в общую книгу листы прошлых дней из старой книги (которую вела версия 1.2.2): при каждом формировании
-    /// добавляются листы «ДД.ММ», которых в общей книге еще нет. Сроки этапов, не заполненные в настройках, берутся
-    /// из последнего листа старой книги.
+    /// Подгружать данные из прошлых версий отчета (<see cref="ArchiveWorkbooks"/>): строки экранов этапов (листы Д.N/З.N),
+    /// которых нет в текущих экранах, — для «Свода» и диаграмм за прошлые периоды; в общую книгу — листы прошлых дней
+    /// «ДД.ММ», которых в ней еще нет. Сроки этапов, не заполненные в настройках, берутся из последнего листа дня.
     /// </summary>
     public bool ImportLegacyDays { get; set; }
 
-    /// <summary>Старая книга (путь относительно файла настроек или полный).</summary>
+    /// <summary>Прошлые версии отчета (старые сводные книги или книги одного этапа с листами «Замечания»/«Документы»).</summary>
+    public List<ArchiveSource> ArchiveWorkbooks { get; set; } = new();
+
+    /// <summary>Старая книга версий 2.0.11–2.0.14 — при загрузке настроек переносится в <see cref="ArchiveWorkbooks"/>.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? LegacyWorkbook { get; set; }
 
     /// <summary>
@@ -127,7 +131,10 @@ public sealed class ReportSettings
 
     public bool IncludeDeadlines { get; set; } = true;
 
-    /// <summary>Sum — одна строка на этап с суммой всех загрузок за период; Each — каждая загрузка отдельной строкой.</summary>
+    /// <summary>
+    /// Раздел «1. Загрузка документов»: Sum — одна строка на этап с суммой загрузок; Each — каждая загрузка отдельной
+    /// строкой (этап | 1, 2, 3… | начало | окончание | документы).
+    /// </summary>
     public LoadsMode LoadsMode { get; set; } = LoadsMode.Sum;
 
     /// <summary>
@@ -137,6 +144,12 @@ public sealed class ReportSettings
     /// всегда по дням.
     /// </summary>
     public ReportLoadsMode ReportLoads { get; set; } = ReportLoadsMode.Auto;
+
+    /// <summary>
+    /// Если в экране нет строки на отчетное время (взята более ранняя), отмечать номер этапа «*» и выводить под таблицей
+    /// примечание «* Этап N: данные экрана на …». false — без отметки и примечания (предупреждение остается в журнале).
+    /// </summary>
+    public bool MarkStaleData { get; set; } = true;
 
     /// <summary>Не выводить в таблице загрузок этапы, по которым за период загрузок не было.</summary>
     public bool HideProjectsWithoutLoads { get; set; } = true;
@@ -224,6 +237,27 @@ public enum DataLabelsMode
     None,
 }
 
+/// <summary>Прошлая версия отчета для архива.</summary>
+public sealed class ArchiveSource
+{
+    /// <summary>Файл (путь относительно файла настроек или полный).</summary>
+    public string Path { get; set; } = "";
+
+    /// <summary>
+    /// Данные каких этапов брать: ключ — номер листов Д.N/З.N («5» — листы Д.5/З.5) или «Экран» для книги одного этапа
+    /// (листы «Замечания»/«Документы»), значение — номер этапа («9»). Переносятся только листы из этого списка
+    /// (выбираются в окне при добавлении книги); «-» или пусто — не переносить. Листы дней переносятся всегда.
+    /// </summary>
+    public Dictionary<string, string> Stages { get; set; } = new();
+
+    /// <summary>Номер этапа для листов <paramref name="key"/> или null, если их данные не переносятся.</summary>
+    public string? StageFor(string key) =>
+        Stages.FirstOrDefault(kv => string.Equals(kv.Key.Trim(), key.Trim(), StringComparison.OrdinalIgnoreCase)).Value is { } v
+        && v.Trim() is { Length: > 0 } stage && stage != "-"
+            ? stage
+            : null;
+}
+
 public sealed class ProjectConfig
 {
     /// <summary>Номер этапа (как выводится в столбце «Этап»).</summary>
@@ -232,10 +266,13 @@ public sealed class ProjectConfig
     /// <summary>Наименование для заголовков диаграмм и имени файла. По умолчанию «{Number} этап».</summary>
     public string? Name { get; set; }
 
-    /// <summary>Путь к файлу «Экран» этапа (листы «Замечания» и «Документы»).</summary>
+    /// <summary>
+    /// Путь к файлу «Экран» этапа (листы «Замечания» и «Документы»). Пусто — архивный этап: данные только из прошлых
+    /// версий отчета и общей книги.
+    /// </summary>
     public string ScreenFile { get; set; } = "";
 
-    /// <summary>Экран этапа читается (этап учитывается в сводной диаграмме и листе «Свод»).</summary>
+    /// <summary>Этап учитывается в листе «Свод» и сводной диаграмме (экран читается).</summary>
     public bool Enabled { get; set; } = true;
 
     /// <summary>Выводить этап в листах отчета («ДД.ММ», «Отчет_дет», «Отчет») и отдельной страницей диаграмм.</summary>
@@ -255,6 +292,10 @@ public sealed class ProjectConfig
 
     [JsonIgnore]
     public string DisplayName => string.IsNullOrWhiteSpace(Name) ? $"{Number} этап" : Name!.Trim();
+
+    /// <summary>Архивный этап — без файла экрана.</summary>
+    [JsonIgnore]
+    public bool IsArchive => string.IsNullOrWhiteSpace(ScreenFile);
 }
 
 /// <summary>
